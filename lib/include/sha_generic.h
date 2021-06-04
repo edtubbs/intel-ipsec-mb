@@ -308,7 +308,7 @@ void sha_generic_1block(const void *data, void *digest,
         if (data == NULL || digest == NULL)
                 return;
 #endif
-        sha_generic_init(digest, sha_type);
+//        sha_generic_init(digest, sha_type);
         sha_generic_one_block(data, digest, is_avx, sha_type);
 #ifdef SAFE_DATA
         clear_scratch_gps();
