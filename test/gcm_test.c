@@ -2338,11 +2338,22 @@ test_sgl(struct IMB_MGR *mb_mgr,
                 test_suite_update(ctx, 1, 0);
         }
 
-        for (i = 0; i < num_segments; i++) {
+        for (i = 0; i < (num_segments + 1); i++) {
+                uint64_t seg_size = 0;
+                uint8_t *seg_ptr = NULL;
+
+                if (i < num_segments) {
+                        seg_size = segment_sizes[i];
+                        seg_ptr = segments[i];
+                }
+#ifdef DEBUG
+                printf("gcm-sgl: job-api=%c, segment=%u, #segments=%u, "
+                       "size=%u bytes\n", job_api ? 'y' : 'n', i,
+                       num_segments, (unsigned) seg_size);
+#endif /* DEBUG */
                 if (job_api) {
                         if (aes_gcm_job(mb_mgr, cipher_dir, &key, key_sz,
-                                        segments[i], segments[i],
-                                        segment_sizes[i],
+                                        seg_ptr, seg_ptr, seg_size,
                                         iv, IV_SZ, NULL, 0, NULL, 0,
                                         &gcm_ctx, IMB_CIPHER_GCM_SGL,
                                         IMB_SGL_UPDATE) < 0) {
@@ -2351,19 +2362,13 @@ test_sgl(struct IMB_MGR *mb_mgr,
                         }
                 } else {
                         if (cipher_dir == IMB_DIR_ENCRYPT) {
-                                imb_aes_gcm_enc_update(mb_mgr, &key,
-                                                       &gcm_ctx,
-                                                       segments[i],
-                                                       segments[i],
-                                                       segment_sizes[i],
-                                                       key_sz);
+                                imb_aes_gcm_enc_update(mb_mgr, &key, &gcm_ctx,
+                                                       seg_ptr, seg_ptr,
+                                                       seg_size, key_sz);
                         } else {
-                                imb_aes_gcm_dec_update(mb_mgr, &key,
-                                                       &gcm_ctx,
-                                                       segments[i],
-                                                       segments[i],
-                                                       segment_sizes[i],
-                                                       key_sz);
+                                imb_aes_gcm_dec_update(mb_mgr, &key, &gcm_ctx,
+                                                       seg_ptr, seg_ptr,
+                                                       seg_size, key_sz);
                         }
                 }
         }
@@ -2399,7 +2404,7 @@ test_sgl(struct IMB_MGR *mb_mgr,
                                "in segment number %u "
                                "(segment size = %u)\n",
                                i, seg_sz);
-                        hexdump(stderr, "Linear output",
+                        hexdump(stderr, "Expected output",
                                 in_buffer + i*seg_sz, seg_sz);
                         hexdump(stderr, "SGL output", segments[i],
                                 seg_sz);
@@ -2413,7 +2418,7 @@ test_sgl(struct IMB_MGR *mb_mgr,
                 printf("ciphertext mismatched "
                        "in segment number %u (segment size = %u)\n",
                        i, seg_sz);
-                hexdump(stderr, "Linear output",
+                hexdump(stderr, "Expected output",
                         in_buffer + i*seg_sz, last_seg_sz);
                 hexdump(stderr, "SGL output", segments[i], last_seg_sz);
                 test_suite_update(ctx, 0, 1);
@@ -2421,7 +2426,7 @@ test_sgl(struct IMB_MGR *mb_mgr,
         if (memcmp(sgl_digest, linear_digest, 16) != 0) {
                 printf("hash mismatched (segment size = %u)\n",
                        seg_sz);
-                hexdump(stderr, "Linear digest",
+                hexdump(stderr, "Expected digest",
                         linear_digest, DIGEST_SZ);
                 hexdump(stderr, "SGL digest", sgl_digest, DIGEST_SZ);
                 test_suite_update(ctx, 0, 1);

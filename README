@@ -141,7 +141,7 @@ implementations.
     | KASUMI-F9         | Y      | N      | N      | N      | N      | N      |
     | ZUC-EIA3          | N      | Y  x4  | Y  x4  | Y  x8  | Y  x16 | Y  x16 |
     | ZUC-EIA3-256(6)   | N      | Y  x4  | Y  x4  | Y  x8  | Y  x16 | Y  x16 |
-    | SNOW3G-UIA2       | N      | Y      | Y      | Y      | N      | N      |
+    | SNOW3G-UIA2       | N      | Y by4  | Y by4  | N      | N      | Y by16 |
     | DOCSIS-CRC32(4)   | N      | Y      | Y      | N      | Y      | Y      |
     | HEC               | N      | Y      | Y      | N      | N      | N      |
     | POLY1305          | Y      | N      | N      | N      | Y      | Y      |
@@ -334,7 +334,7 @@ For more build options and their explanation run:
 > make help
 
 
-Windows (x64 only)
+Windows MSVS (x64 only)
 
 Required tools:
 - Microsoft (R) Visual Studio 2015:
@@ -373,6 +373,34 @@ use.
 
 For more build options and their explanation run:
 > nmake /f win_x64.mak help
+
+
+Windows Mingw-w64 (64-bit only)
+
+Required tools:
+- GNU mingw32-make.exe
+- NASM version 2.14 (or newer)
+- gcc (GCC) 10.3.0 (or newer)
+
+Shared library:
+> mingw32-make.exe
+
+Static library:
+> mingw32-make.exe SHARED=n
+
+Clean the build:
+> mingw32-make.exe clean
+or
+> mingw32-make.exe clean SHARED=n
+
+Build with debugging information:
+> mingw32-make.exe DEBUG=y
+
+NOTE: Building with debugging information is not advised for production
+use.
+
+For more build options and their explanation run:
+> mingw32-make.exe help
 
 
 FreeBSD (64-bit only)

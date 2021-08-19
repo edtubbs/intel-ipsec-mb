@@ -137,15 +137,19 @@ lib_objs1 = \
 	$(OBJ_DIR)\aes128_cbc_dec_by4_sse_no_aesni.obj \
 	$(OBJ_DIR)\aes128_cbc_dec_by8_sse.obj \
 	$(OBJ_DIR)\aes128_cbc_dec_by8_avx.obj \
-	$(OBJ_DIR)\aes_ecb_by4_sse.obj \
+	$(OBJ_DIR)\aes128_ecb_by4_sse.obj \
+	$(OBJ_DIR)\aes192_ecb_by4_sse.obj \
+	$(OBJ_DIR)\aes256_ecb_by4_sse.obj \
+	$(OBJ_DIR)\aes128_ecb_by4_avx.obj \
+	$(OBJ_DIR)\aes192_ecb_by4_avx.obj \
+	$(OBJ_DIR)\aes256_ecb_by4_avx.obj \
 	$(OBJ_DIR)\aes_ecb_by4_sse_no_aesni.obj \
-	$(OBJ_DIR)\aes_ecb_by4_avx.obj \
 	$(OBJ_DIR)\pon_sse.obj \
 	$(OBJ_DIR)\pon_sse_no_aesni.obj \
 	$(OBJ_DIR)\aes128_cntr_by8_sse.obj \
 	$(OBJ_DIR)\aes128_cntr_by8_sse_no_aesni.obj \
 	$(OBJ_DIR)\pon_avx.obj \
-	$(OBJ_DIR)\pon_avx512.obj \
+	$(OBJ_DIR)\pon_vaes_avx512.obj \
 	$(OBJ_DIR)\aes128_cntr_by8_avx.obj \
 	$(OBJ_DIR)\aes128_cntr_ccm_by8_sse.obj \
 	$(OBJ_DIR)\aes128_cntr_ccm_by8_sse_no_aesni.obj \
@@ -245,12 +249,16 @@ lib_objs1 = \
 	$(OBJ_DIR)\zuc_sse_no_aesni.obj \
 	$(OBJ_DIR)\zuc_avx.obj \
 	$(OBJ_DIR)\zuc_avx2.obj \
-	$(OBJ_DIR)\zuc_avx512.obj \
+	$(OBJ_DIR)\zuc_x16_avx512.obj \
+	$(OBJ_DIR)\zuc_x16_vaes_avx512.obj \
 	$(OBJ_DIR)\zuc_iv.obj \
 	$(OBJ_DIR)\snow3g_sse.obj \
 	$(OBJ_DIR)\snow3g_sse_no_aesni.obj \
+	$(OBJ_DIR)\snow3g_uia2_sse.obj \
+	$(OBJ_DIR)\snow3g_uia2_sse_no_aesni.obj \
 	$(OBJ_DIR)\snow3g_avx.obj \
 	$(OBJ_DIR)\snow3g_avx2.obj \
+	$(OBJ_DIR)\snow3g_uia2_avx.obj \
 	$(OBJ_DIR)\snow3g_tables.obj \
 	$(OBJ_DIR)\snow3g_iv.obj \
 	$(OBJ_DIR)\aes_xcbc_expand_key.obj \
@@ -462,7 +470,9 @@ lib_objs2 = \
 	$(OBJ_DIR)\chacha20_poly1305.obj \
 	$(OBJ_DIR)\snow_v_sse_noaesni.obj \
 	$(OBJ_DIR)\snow_v_sse.obj \
-	$(OBJ_DIR)\snow_v_avx.obj
+	$(OBJ_DIR)\snow_v_avx.obj \
+	$(OBJ_DIR)\snow3g_avx512.obj \
+	$(OBJ_DIR)\snow3g_uia2_by32_vaes_avx512.obj
 
 gcm_objs = \
 	$(OBJ_DIR)\gcm.obj \
@@ -470,17 +480,23 @@ gcm_objs = \
 	$(OBJ_DIR)\gcm128_avx_gen2.obj \
 	$(OBJ_DIR)\gcm128_avx_gen4.obj \
 	$(OBJ_DIR)\gcm128_avx512.obj \
-	$(OBJ_DIR)\gcm128_vaes_avx512.obj \
+	$(OBJ_DIR)\gcm128_api_vaes_avx512.obj \
+	$(OBJ_DIR)\gcm128_sgl_api_vaes_avx512.obj \
+	$(OBJ_DIR)\gcm128_gmac_api_vaes_avx512.obj \
 	$(OBJ_DIR)\gcm192_sse.obj \
 	$(OBJ_DIR)\gcm192_avx_gen2.obj \
 	$(OBJ_DIR)\gcm192_avx_gen4.obj \
 	$(OBJ_DIR)\gcm192_avx512.obj \
-	$(OBJ_DIR)\gcm192_vaes_avx512.obj \
+	$(OBJ_DIR)\gcm192_api_vaes_avx512.obj \
+	$(OBJ_DIR)\gcm192_sgl_api_vaes_avx512.obj \
+	$(OBJ_DIR)\gcm192_gmac_api_vaes_avx512.obj \
 	$(OBJ_DIR)\gcm256_sse.obj \
 	$(OBJ_DIR)\gcm256_avx_gen2.obj \
 	$(OBJ_DIR)\gcm256_avx_gen4.obj \
 	$(OBJ_DIR)\gcm256_avx512.obj \
-	$(OBJ_DIR)\gcm256_vaes_avx512.obj \
+	$(OBJ_DIR)\gcm256_api_vaes_avx512.obj \
+	$(OBJ_DIR)\gcm256_sgl_api_vaes_avx512.obj \
+	$(OBJ_DIR)\gcm256_gmac_api_vaes_avx512.obj \
 	$(OBJ_DIR)\gcm128_sse_no_aesni.obj \
 	$(OBJ_DIR)\gcm192_sse_no_aesni.obj \
 	$(OBJ_DIR)\gcm256_sse_no_aesni.obj

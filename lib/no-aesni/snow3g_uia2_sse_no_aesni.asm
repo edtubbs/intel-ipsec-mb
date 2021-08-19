@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2019-2021, Intel Corporation
+;; Copyright (c) 2021, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -26,10 +26,7 @@
 ;;
 
 %include "include/aesni_emu.inc"
-%define AES_ECB_ENC_128 aes_ecb_enc_128_sse_no_aesni
-%define AES_ECB_ENC_192 aes_ecb_enc_192_sse_no_aesni
-%define AES_ECB_ENC_256 aes_ecb_enc_256_sse_no_aesni
-%define AES_ECB_DEC_128 aes_ecb_dec_128_sse_no_aesni
-%define AES_ECB_DEC_192 aes_ecb_dec_192_sse_no_aesni
-%define AES_ECB_DEC_256 aes_ecb_dec_256_sse_no_aesni
-%include "sse/aes128_ecb_by4_sse.asm"
+%define NO_AESNI
+%define SNOW3G_F9_1_BUFFER_INTERNAL snow3g_f9_1_buffer_internal_sse_no_aesni
+%include "sse/snow3g_uia2_sse.asm"
+

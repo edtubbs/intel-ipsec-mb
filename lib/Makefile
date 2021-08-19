@@ -80,20 +80,27 @@ INCLUDE_DIRS := include . no-aesni
 INCLUDES := $(foreach i,$(INCLUDE_DIRS),-I $i)
 
 CC ?= gcc
+# MINGW should be non-zero value if detected
+MINGW ?= $(shell $(CC) -dM -E - < /dev/null | grep -i mingw | wc -l)
 
 # if "-z ibt" is supported then assume "-z shstk, -z cet-report=error" are also supported
 # "-fcf-protection" needs to be checked separately
+ifeq ($(MINGW),0)
 CC_HAS_CET = $(and $(shell $(CC) --target-help 2> /dev/null | grep -m1 -e "-z ibt" | wc -l), \
 	$(shell $(CC) --help=common 2> /dev/null | grep -m1 -e "-fcf-protection" | wc -l))
 CET_LDFLAGS=-r -z ibt -z shstk
-
-CFLAGS := -DLINUX -DNO_COMPAT_IMB_API_053 $(EXTRA_CFLAGS) $(INCLUDES) \
+endif
+CFLAGS := -DNO_COMPAT_IMB_API_053 $(EXTRA_CFLAGS) $(INCLUDES) \
 	-W -Wall -Wextra -Wmissing-declarations -Wpointer-arith \
 	-Wcast-qual -Wundef -Wwrite-strings  \
 	-Wformat -Wformat-security \
 	-Wunreachable-code -Wmissing-noreturn -Wsign-compare -Wno-endif-labels \
 	-Wstrict-prototypes -Wmissing-prototypes -Wold-style-definition \
 	-fno-strict-overflow -fno-delete-null-pointer-checks -fwrapv
+
+ifeq ($(MINGW),0)
+CFLAGS += -DLINUX
+endif
 
 ifeq ($(CC_HAS_CET),1)
 CFLAGS += -fcf-protection=full
@@ -102,10 +109,14 @@ endif
 ASM_INCLUDE_DIRS := .
 
 YASM_INCLUDES := $(foreach i,$(ASM_INCLUDE_DIRS),-I $i)
-YASM_FLAGS := -f x64 -f elf64 -X gnu -g dwarf2 -DLINUX -D__linux__ $(YASM_INCLUDES)
-
 NASM_INCLUDES := $(foreach i,$(ASM_INCLUDE_DIRS),-I$i/)
+ifneq ($(MINGW),0)
+YASM_FLAGS := -f x64 -f win64 -X gnu -g dwarf2 -DWIN_ABI $(YASM_INCLUDES)
+NASM_FLAGS := -Werror -fwin64 -Xvc -gcv8 -DWIN_ABI $(NASM_INCLUDES)
+else
+YASM_FLAGS := -f x64 -f elf64 -X gnu -g dwarf2 -DLINUX -D__linux__ $(YASM_INCLUDES)
 NASM_FLAGS := -Werror -felf64 -Xgnu -gdwarf -DLINUX -D__linux__ $(NASM_INCLUDES)
+endif
 
 DEBUG_OPT ?= -O0
 ifeq ($(DEBUG),y)
@@ -113,8 +124,13 @@ CFLAGS += -g -DDEBUG
 OPT = $(DEBUG_OPT)
 LDFLAGS += -g
 else
+ifeq ($(MINGW),0)
 OPT = -O3
 CFLAGS += -fstack-protector -D_FORTIFY_SOURCE=2
+else
+OPT = -O2
+LDFLAGS += -s
+endif
 endif
 
 ifneq ($(SAFE_DATA),n)
@@ -178,9 +194,13 @@ endif
 # so or static build
 ifeq ($(SHARED),y)
 CFLAGS += -fPIC
+ifneq ($(MINGW),0)
+LIBNAME = $(LIB).dll
+else
 LIBNAME = $(LIB).so.$(VERSION)
-LIBPERM = 0755
 LDFLAGS += -Wl,-z,noexecstack -Wl,-z,relro -Wl,-z,now
+endif
+LIBPERM = 0755
 ifeq ($(CC_HAS_CET),1)
 LDFLAGS += -fcf-protection=full -Wl,-z,ibt -Wl,-z,shstk -Wl,-z,cet-report=error
 endif
@@ -237,6 +257,7 @@ c_lib_objs := \
 	snow3g_sse_no_aesni.o \
 	snow3g_avx.o \
 	snow3g_avx2.o \
+	snow3g_avx512.o \
 	snow3g_tables.o \
 	snow3g_iv.o \
 	snow_v_sse.o \
@@ -313,7 +334,8 @@ asm_noaesni_lib_objs := \
 	crc32_lte_sse_no_aesni.o \
 	crc32_fp_sse_no_aesni.o \
 	crc32_iuup_sse_no_aesni.o \
-	crc32_wimax_sse_no_aesni.o
+	crc32_wimax_sse_no_aesni.o \
+	snow3g_uia2_sse_no_aesni.o
 
 #
 # List of ASM modules (sse directory)
@@ -335,7 +357,9 @@ asm_sse_lib_objs := \
 	aes128_cntr_by8_sse.o \
 	aes192_cntr_by8_sse.o \
 	aes256_cntr_by8_sse.o \
-	aes_ecb_by4_sse.o \
+	aes128_ecb_by4_sse.o \
+	aes192_ecb_by4_sse.o \
+	aes256_ecb_by4_sse.o \
 	aes128_cntr_ccm_by8_sse.o \
 	aes256_cntr_ccm_by8_sse.o \
 	aes_cfb_sse.o \
@@ -411,7 +435,8 @@ asm_sse_lib_objs := \
 	crc32_iuup_sse.o \
 	crc32_wimax_sse.o \
 	chacha20_sse.o \
-        memcpy_sse.o
+        memcpy_sse.o \
+	snow3g_uia2_sse.o
 
 #
 # List of ASM modules (avx directory)
@@ -429,7 +454,9 @@ asm_avx_lib_objs := \
 	aes256_cntr_by8_avx.o \
 	aes128_cntr_ccm_by8_avx.o \
 	aes256_cntr_ccm_by8_avx.o \
-	aes_ecb_by4_avx.o \
+	aes128_ecb_by4_avx.o \
+	aes192_ecb_by4_avx.o \
+	aes256_ecb_by4_avx.o \
 	aes_cfb_avx.o \
 	aes128_cbc_mac_x8.o \
 	aes256_cbc_mac_x8.o \
@@ -483,7 +510,8 @@ asm_avx_lib_objs := \
 	crc32_iuup_avx.o \
 	crc32_wimax_avx.o \
 	chacha20_avx.o \
-        memcpy_avx.o
+        memcpy_avx.o \
+	snow3g_uia2_avx.o
 
 #
 # List of ASM modules (avx2 directory)
@@ -518,7 +546,7 @@ asm_avx512_lib_objs := \
 	sha512_x8_avx512.o \
 	des_x16_avx512.o \
 	cntr_vaes_avx512.o \
-	pon_avx512.o \
+	pon_vaes_avx512.o \
 	aes_cbc_dec_vaes_avx512.o \
 	aes_cbc_enc_vaes_avx512.o \
 	aes_cbcs_enc_vaes_avx512.o \
@@ -527,7 +555,8 @@ asm_avx512_lib_objs := \
 	aes_docsis_enc_avx512.o \
 	aes_docsis_dec_vaes_avx512.o \
 	aes_docsis_enc_vaes_avx512.o \
-	zuc_avx512.o \
+	zuc_x16_avx512.o \
+	zuc_x16_vaes_avx512.o \
 	mb_mgr_aes_submit_avx512.o \
 	mb_mgr_aes_flush_avx512.o \
 	mb_mgr_aes192_submit_avx512.o \
@@ -565,7 +594,8 @@ asm_avx512_lib_objs := \
 	crc32_lte_avx512.o \
 	crc32_fp_avx512.o \
 	crc32_iuup_avx512.o \
-	crc32_wimax_avx512.o
+	crc32_wimax_avx512.o \
+	snow3g_uia2_by32_vaes_avx512.o
 
 #
 # GCM object file lists
@@ -586,7 +616,9 @@ asm_avx2_gcm_objs := \
 	gcm128_avx_gen4.o gcm192_avx_gen4.o gcm256_avx_gen4.o
 
 asm_avx512_gcm_objs := \
-	gcm128_vaes_avx512.o gcm192_vaes_avx512.o gcm256_vaes_avx512.o \
+	gcm128_api_vaes_avx512.o gcm192_api_vaes_avx512.o gcm256_api_vaes_avx512.o \
+	gcm128_sgl_api_vaes_avx512.o gcm192_sgl_api_vaes_avx512.o gcm256_sgl_api_vaes_avx512.o \
+	gcm128_gmac_api_vaes_avx512.o gcm192_gmac_api_vaes_avx512.o gcm256_gmac_api_vaes_avx512.o \
 	gcm128_avx512.o gcm192_avx512.o gcm256_avx512.o
 
 #
@@ -626,9 +658,13 @@ all: $(LIB_DIR)/$(LIBNAME)
 
 $(LIB_DIR)/$(LIBNAME): $(target_obj_files)
 ifeq ($(SHARED),y)
+ifneq ($(MINGW),0)
+	$(CC) -shared $(LDFLAGS) -o $(LIBNAME) $^ $(LIB).def
+else
 	$(CC) -shared $(LDFLAGS) -Wl,-soname,$(LIB).so.$(SO_VERSION) -o $@ $^ -lc
 	ln -f -s $(LIBNAME) $(LIB_DIR)/$(LIB).so.$(SO_VERSION)
 	ln -f -s $(LIB).so.$(SO_VERSION) $(LIB_DIR)/$(LIB).so
+endif
 else
 	$(AR) -qcs $@ $^
 endif
@@ -787,7 +823,7 @@ TAGS:
 clean:
 	rm -Rf $(target_obj_files)
 	rm -Rf $(dep_target_files)
-	rm -f $(LIB_DIR)/$(LIB).a $(LIB_DIR)/$(LIB).so*
+	rm -f $(LIB_DIR)/$(LIB).a $(LIB_DIR)/$(LIB).so* $(LIB_DIR)/$(LIB).dll
 
 .PHONY: help
 help:

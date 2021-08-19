@@ -4,8 +4,12 @@ Release Notes for Intel(R) Multi-Buffer Crypto for IPsec Library
 Unreleased
 ========================================================================
 
+General
+- Added support to build with Mingw-w64 on Windows
+
 Library
 - PON algorithm AVX512-VAES implementation added
+- SNOW3G-UIA2 AVX512-VPCLMULQDQ implementation added
 
 v1.0 April 2021
 ========================================================================

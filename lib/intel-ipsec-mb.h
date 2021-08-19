@@ -62,15 +62,29 @@ typedef struct {
 
 #else
 /* Windows */
+
+#ifdef __MINGW32__
+/* MinGW-w64 */
 #define DECLARE_ALIGNED(decl, alignval) \
+        decl __attribute__((aligned(alignval)))
+#undef __forceinline
+#define __forceinline \
+        static inline __attribute__((always_inline))
+
+#else
+/* MSVS */
+#define DECLARE_ALIGNED(decl, alignval)         \
         __declspec(align(alignval)) decl
 #define __forceinline \
         static __forceinline
 
+#endif /* __MINGW__ */
+
 /* Windows DLL export is done via DEF file */
 #define IMB_DLL_EXPORT
 #define IMB_DLL_LOCAL
-#endif
+
+#endif /* defined __linux__ || defined __FreeBSD__ */
 
 /* Library version */
 #define IMB_VERSION_STR "1.0.0"
@@ -1161,6 +1175,8 @@ IMB_DLL_EXPORT const char *imb_get_strerror(int errnum);
  */
 IMB_DLL_EXPORT IMB_MGR *alloc_mb_mgr(uint64_t flags);
 IMB_DLL_EXPORT void free_mb_mgr(IMB_MGR *state);
+IMB_DLL_EXPORT size_t imb_get_mb_mgr_size(void);
+IMB_DLL_EXPORT IMB_MGR *imb_set_pointers_mb_mgr(void *ptr, uint64_t flags);
 
 IMB_DLL_EXPORT void init_mb_mgr_avx(IMB_MGR *state);
 IMB_DLL_EXPORT IMB_JOB *submit_job_avx(IMB_MGR *state);
