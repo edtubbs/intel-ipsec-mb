@@ -67,8 +67,7 @@
 
 %define INSERT_HIGH64_MASK k1
 
-
-section .data
+mksection .rodata
 default rel
 
 align 64
@@ -103,7 +102,7 @@ dq      0x0f0e0d0c0b0a0908, 0x0706050403020100
 dq      0x0f0e0d0c0b0a0908, 0x0706050403020100
 dq      0x0f0e0d0c0b0a0908, 0x0706050403020100
 
-section .text
+mksection .text
 
 %ifidn __OUTPUT_FORMAT__, win64
         %define XMM_STORAGE     16*7
@@ -144,7 +143,6 @@ section .text
         mov     [rsp + GP_OFFSET + 40], r11 ;; rsp pointer
 %endmacro
 
-
 %macro FUNC_RESTORE 0
 
 %ifidn __OUTPUT_FORMAT__, win64
@@ -166,7 +164,6 @@ section .text
         mov     rsp, [rsp + GP_OFFSET + 40]
 %endmacro
 
-
 ;; Horizontal XOR - 4 x 128bits xored together
 %macro VHPXORI4x128 2
 %define %%REG   %1      ;; [in/out] zmm with 4x128bits to xor; 128bit output
@@ -179,7 +176,6 @@ section .text
 
 %endmacro
 
-
 ;; Horizontal XOR - 2 x 128bits xored together
 %macro VHPXORI2x128 2
 %define %%REG   %1      ; [in/out] YMM/ZMM with 2x128bits to xor; 128bit output
@@ -187,7 +183,6 @@ section .text
         vextracti32x4   XWORD(%%TMP), %%REG, 1
         vpxorq          XWORD(%%REG), XWORD(%%REG), XWORD(%%TMP)
 %endmacro
-
 
 ;; Reduce from 128 bits to 64 bits
 %macro REDUCE_TO_64 2
@@ -201,7 +196,6 @@ section .text
         vpxor           %%IN_OUT, %%IN_OUT, %%XTMP
 
 %endmacro
-
 
 ;; Multiply 64b x 64b and reduce result to 64 bits
 ;; Lower 64-bits of xmms are multiplied
@@ -218,7 +212,6 @@ section .text
         REDUCE_TO_64    %%IN0_OUT, %%XTMP
 %endif
 %endmacro
-
 
 ;; Multiply 64b x 64b blocks and reduce result to 64 bits.
 ;; Lower and higher 64-bits of all 128-bit lanes are multiplied.
@@ -257,7 +250,6 @@ section .text
         vpunpcklqdq     %%IN0_OUT, %%IN0_OUT, %%T2
 
 %endmacro
-
 
 ;; Precompute powers of P up to P^4 or P^32
 ;; Results are arranged from highest power to lowest at 128b granularity
@@ -388,7 +380,6 @@ section .text
 %endif
 %endmacro
 
-
 ;; Process final 1 - 31 blocks
 %macro  PROCESS_FINAL_BLOCKS 21
 %define %%MAX_BLOCKS       %1  ;; [in] max possible number of final blocks
@@ -495,7 +486,6 @@ section .text
 
 %endmacro
 
-
 ;; uint32_t
 ;; snow3g_f9_1_buffer_internal_vaes_avx512(const uint64_t *pBufferIn,
 ;;                                         const uint32_t KS[5],
@@ -521,17 +511,13 @@ snow3g_f9_1_buffer_internal_vaes_avx512:
         mov     qword_len, bit_len              ;; lenInBits -> lenInQwords
         shr     qword_len, 6
 
-        cmp     qword_len, 32                   ;; >=32 blocks go to 32 blocks loop
-        jae     init_32_block_loop
+        jz      full_blocks_complete
 
-        cmp     qword_len, 4                    ;; check at least 4 blocks
-        jae     init_4_block_loop
-
-        jmp     single_block_check
-
-init_32_block_loop:
         ;; precompute up to P^32
         PRECOMPUTE_CONSTANTS P1, 32, xmm0, xmm1, xmm3, xmm4, xmm5, xmm6, xmm9, xmm20, xmm21
+
+        cmp     qword_len, 32                   ;; <32 blocks go to final blocks
+        jb      lt32_blocks
 
 start_32_block_loop:
         vmovdqu64       zmm3, [in_ptr]
@@ -632,55 +618,6 @@ le8_blocks:
 
         jmp     full_blocks_complete
 
-
-init_4_block_loop:
-        ;; precompute up to P^4
-        PRECOMPUTE_CONSTANTS P1, 4, xmm0, xmm1, xmm3, xmm4, xmm5, xmm6
-
-start_4_block_loop:
-        vmovdqu         xmm3, [in_ptr]
-        vmovdqu         xmm4, [in_ptr + 16]
-
-        vpshufb         xmm3, xmm3, XWORD(BSWAP64_MASK)
-        vpshufb         xmm4, xmm4, XWORD(BSWAP64_MASK)
-
-        vpxor           xmm3, xmm3, EV
-
-        vpclmulqdq      xmm5, xmm4, xmm0, 0x10
-        vpclmulqdq      xmm6, xmm4, xmm0, 0x01
-
-        vpclmulqdq      xmm10, xmm3, xmm1, 0x10
-        vpclmulqdq      xmm11, xmm3, xmm1, 0x01
-
-        vpxor           xmm5, xmm5, xmm6
-        vpxor           xmm6, xmm10, xmm11
-        vpxor           EV, xmm6, xmm5
-
-        REDUCE_TO_64    EV, xmm3
-
-        vmovq           EV, EV
-
-        add     in_ptr, 4*8
-        sub     qword_len, 4
-        cmp     qword_len, 4
-
-        ;; less than 4 blocks left
-        jb      single_block_check
-        jmp     start_4_block_loop
-
-start_single_block_loop:
-        vmovq   xmm0, [in_ptr]
-        vpshufb xmm0, xmm0, XWORD(BSWAP64_MASK)
-        vpxor   EV, xmm0
-        MUL_AND_REDUCE_64x64_LOW EV, P1, xmm1
-
-        add    in_ptr, 1*8
-        dec    qword_len
-
-single_block_check:
-        cmp     qword_len, 0
-        jne     start_single_block_loop
-
 full_blocks_complete:
 
         mov     tmp5, 0x3f      ;; len_in_bits % 64
@@ -734,7 +671,4 @@ skip_rem_bits:
 
         ret
 
-
-%ifdef LINUX
-section .note.GNU-stack noalloc noexec nowrite progbits
-%endif
+mksection stack-noexec

@@ -82,6 +82,8 @@ const struct {
         OOO_INFO(zuc256_eia3_ooo, MB_MGR_ZUC_OOO),
         OOO_INFO(aes256_ccm_ooo, MB_MGR_CCM_OOO),
 	OOO_INFO(aes256_cmac_ooo, MB_MGR_CMAC_OOO),
+        OOO_INFO(snow3g_uea2_ooo, MB_MGR_SNOW3G_OOO),
+        OOO_INFO(snow3g_uia2_ooo, MB_MGR_SNOW3G_OOO),
 };
 
 /**
@@ -150,7 +152,8 @@ static void set_ooo_mgr_road_block(IMB_MGR *mgr)
  * should be allocated externally.
  *
  * init_mb_mgr_XXX() must be called after this function call,
- * whereas XXX is the desired architecture.
+ * whereas XXX is the desired architecture (including "auto"),
+ * only if reset_mgr is set to 0.
  *
  * @param mem_ptr a pointer to allocated memory
  * @param flags multi-buffer manager flags
@@ -158,9 +161,12 @@ static void set_ooo_mgr_road_block(IMB_MGR *mgr)
  *                          currently SHANI is only available for SSE
  *     IMB_FLAG_AESNI_OFF - disable use (and detection) of AES extensions.
  *
+ * @param reset_mgr if 0, IMB_MGR structure is not cleared, else it is.
+ *
  * @return Pointer to IMB_MGR structure
  */
-IMB_MGR *imb_set_pointers_mb_mgr(void *mem_ptr, uint64_t flags)
+IMB_MGR *imb_set_pointers_mb_mgr(void *mem_ptr, const uint64_t flags,
+                                 const unsigned reset_mgr)
 {
         if (mem_ptr == NULL) {
                 imb_set_errno(mem_ptr, ENOMEM);
@@ -173,8 +179,33 @@ IMB_MGR *imb_set_pointers_mb_mgr(void *mem_ptr, uint64_t flags)
         const size_t mem_size = imb_get_mb_mgr_size();
         unsigned i;
 
-        /* Zero out MB_MGR memory */
-        memset(mem_ptr, 0, mem_size);
+        if (reset_mgr) {
+                /* Zero out MB_MGR memory */
+                memset(mem_ptr, 0, mem_size);
+        } else {
+                IMB_ARCH used_arch = (IMB_ARCH) ptr->used_arch;
+
+                /* Reset function pointers from previously used architecture */
+                switch (used_arch) {
+                case IMB_ARCH_NOAESNI:
+                        init_mb_mgr_sse_no_aesni_internal(ptr, 0);
+                        break;
+                case IMB_ARCH_SSE:
+                        init_mb_mgr_sse_internal(ptr, 0);
+                        break;
+                case IMB_ARCH_AVX:
+                        init_mb_mgr_avx_internal(ptr, 0);
+                        break;
+                case IMB_ARCH_AVX2:
+                        init_mb_mgr_avx2_internal(ptr, 0);
+                        break;
+                case IMB_ARCH_AVX512:
+                        init_mb_mgr_avx512_internal(ptr, 0);
+                        break;
+                default:
+                        break;
+                }
+        }
 
         imb_set_errno(ptr, 0);
         ptr->flags = flags; /* save the flags for future use in init */
@@ -239,7 +270,7 @@ IMB_MGR *alloc_mb_mgr(uint64_t flags)
         ptr = alloc_aligned_mem(imb_get_mb_mgr_size());
         IMB_ASSERT(ptr != NULL);
         if (ptr != NULL) {
-                imb_set_pointers_mb_mgr(ptr, flags);
+                imb_set_pointers_mb_mgr(ptr, flags, 1);
         } else {
                 imb_set_errno(ptr, ENOMEM);
                 return NULL;

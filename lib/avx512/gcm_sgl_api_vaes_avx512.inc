@@ -28,11 +28,13 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 %include "avx512/gcm_vaes_avx512.inc"
+%include "include/error.inc"
+%include "include/os.asm"
 
 %ifndef GCM_SGL_API_VAES_AVX512_INC
 %define GCM_SGL_API_VAES_AVX512_INC
 
-section .text
+mksection .text
 default rel
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -49,17 +51,20 @@ FN_NAME(init,_):
         FUNC_SAVE
 
 %ifdef SAFE_PARAM
+        ;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+
         ;; Check key_data != NULL
         cmp     arg1, 0
-        jz      exit_init
+        jz      error_init
 
         ;; Check context_data != NULL
         cmp     arg2, 0
-        jz      exit_init
+        jz      error_init
 
         ;; Check IV != NULL
         cmp     arg3, 0
-        jz      exit_init
+        jz      error_init
 
         ;; Check if aad_len == 0
         cmp     arg5, 0
@@ -67,7 +72,7 @@ FN_NAME(init,_):
 
         ;; Check aad != NULL (aad_len != 0)
         cmp     arg4, 0
-        jz      exit_init
+        jz      error_init
 
 skip_aad_check_init:
 %endif
@@ -79,6 +84,34 @@ exit_init:
 
         FUNC_RESTORE
         ret
+
+%ifdef SAFE_PARAM
+error_init:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
+
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Check context_data != NULL
+        IMB_ERR_CHECK_NULL arg2, rax, IMB_ERR_NULL_CTX
+
+        ;; Check IV != NULL
+        IMB_ERR_CHECK_NULL arg3, rax, IMB_ERR_NULL_IV
+
+        ;; Check if aad_len == 0
+        cmp     arg5, 0
+        jz      skip_aad_check_error_init
+
+        ;; Check aad != NULL (aad_len != 0)
+        IMB_ERR_CHECK_NULL arg4, rax, IMB_ERR_NULL_AAD
+
+skip_aad_check_error_init:
+
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+        jmp     exit_init
+%endif
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;void   aes_gcm_init_var_iv_128_vaes_avx512 / aes_gcm_init_var_iv_192_vaes_avx512 /
@@ -96,21 +129,24 @@ FN_NAME(init_var_iv,_):
         FUNC_SAVE
 
 %ifdef SAFE_PARAM
+        ;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+
         ;; Check key_data != NULL
         cmp     arg1, 0
-        jz      exit_init_IV
+        jz      error_init_IV
 
         ;; Check context_data != NULL
         cmp     arg2, 0
-        jz      exit_init_IV
+        jz      error_init_IV
 
         ;; Check IV != NULL
         cmp     arg3, 0
-        jz      exit_init_IV
+        jz      error_init_IV
 
         ;; Check iv_len != 0
         cmp     arg4, 0
-        jz      exit_init_IV
+        jz      error_init_IV
 
         ;; Check if aad_len == 0
         cmp     arg6, 0
@@ -118,7 +154,7 @@ FN_NAME(init_var_iv,_):
 
         ;; Check aad != NULL (aad_len != 0)
         cmp     arg5, 0
-        jz      exit_init_IV
+        jz      error_init_IV
 
 skip_aad_check_init_IV:
 %endif
@@ -142,9 +178,40 @@ skip_iv_len_12_init_IV:
 %endif
 exit_init_IV:
 
-
         FUNC_RESTORE
         ret
+
+%ifdef SAFE_PARAM
+error_init_IV:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
+
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Check context_data != NULL
+        IMB_ERR_CHECK_NULL arg2, rax, IMB_ERR_NULL_CTX
+
+        ;; Check IV != NULL
+        IMB_ERR_CHECK_NULL arg3, rax, IMB_ERR_NULL_IV
+
+        ;; Check iv_len != 0
+        IMB_ERR_CHECK_ZERO arg4, rax, IMB_ERR_IV_LEN
+
+        ;; Check if aad_len == 0
+        cmp     arg6, 0
+        jz      skip_aad_check_error_init_IV
+
+        ;; Check aad != NULL (aad_len != 0)
+        IMB_ERR_CHECK_NULL arg5, rax, IMB_ERR_NULL_AAD
+
+skip_aad_check_error_init_IV:
+
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+        jmp     exit_init_IV
+%endif
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;void   aes_gcm_enc_128_update_vaes_avx512 / aes_gcm_enc_192_update_vaes_avx512 /
@@ -153,7 +220,7 @@ exit_init_IV:
 ;        struct gcm_context_data *context_data,
 ;        u8       *out,
 ;        const u8 *in,
-;        u64      plaintext_len);
+;        u64      msg_len);
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 MKGLOBAL(FN_NAME(enc,_update_),function,)
 FN_NAME(enc,_update_):
@@ -161,31 +228,72 @@ FN_NAME(enc,_update_):
         FUNC_SAVE
 
 %ifdef SAFE_PARAM
+        ;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+
+        ;; Load max len to reg on windows
+        INIT_GCM_MAX_LENGTH
+
         ;; Check key_data != NULL
         cmp     arg1, 0
-        jz      exit_update_enc
+        jz      error_update_enc
 
         ;; Check context_data != NULL
         cmp     arg2, 0
-        jz      exit_update_enc
+        jz      error_update_enc
 
-        ;; Check if plaintext_len == 0
+        ;; Check if msg_len == 0
         cmp     arg5, 0
-        jz      exit_update_enc
+        jz      error_update_enc
 
-        ;; Check out != NULL (plaintext_len != 0)
+        ;; Check if msg_len > max_len
+        cmp     arg5, GCM_MAX_LENGTH
+        ja      error_update_enc
+
+        ;; Check out != NULL (msg_len != 0)
         cmp     arg3, 0
-        jz      exit_update_enc
+        jz      error_update_enc
 
-        ;; Check in != NULL (plaintext_len != 0)
+        ;; Check in != NULL (msg_len != 0)
         cmp     arg4, 0
-        jz      exit_update_enc
+        jz      error_update_enc
 %endif
         GCM_ENC_DEC arg1, arg2, arg3, arg4, arg5, ENC, multi_call
 
 exit_update_enc:
         FUNC_RESTORE
         ret
+
+%ifdef SAFE_PARAM
+error_update_enc:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
+
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Check context_data != NULL
+        IMB_ERR_CHECK_NULL arg2, rax, IMB_ERR_NULL_CTX
+
+        ;; Check if plaintext_len == 0
+        cmp     arg5, 0
+        jz      skip_in_out_check_error_update_enc
+
+        ;; Check if msg_len > max_len
+        IMB_ERR_CHECK_ABOVE arg5, GCM_MAX_LENGTH, rax, IMB_ERR_CIPH_LEN
+
+        ;; Check out != NULL
+        IMB_ERR_CHECK_NULL arg3, rax, IMB_ERR_NULL_DST
+
+        ;; Check in != NULL (plaintext_len != 0)
+        IMB_ERR_CHECK_NULL arg4, rax, IMB_ERR_NULL_SRC
+
+skip_in_out_check_error_update_enc:
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+        jmp     exit_update_enc
+%endif
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;void   aes_gcm_dec_128_update_vaes_avx512 / aes_gcm_dec_192_update_vaes_avx512 /
@@ -194,7 +302,7 @@ exit_update_enc:
 ;        struct gcm_context_data *context_data,
 ;        u8       *out,
 ;        const u8 *in,
-;        u64      plaintext_len);
+;        u64      msg_len);
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 MKGLOBAL(FN_NAME(dec,_update_),function,)
 FN_NAME(dec,_update_):
@@ -202,25 +310,35 @@ FN_NAME(dec,_update_):
         FUNC_SAVE
 
 %ifdef SAFE_PARAM
+        ;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+
+        ;; Load max len to reg on windows
+        INIT_GCM_MAX_LENGTH
+
         ;; Check key_data != NULL
         cmp     arg1, 0
-        jz      exit_update_dec
+        jz      error_update_dec
 
         ;; Check context_data != NULL
         cmp     arg2, 0
-        jz      exit_update_dec
+        jz      error_update_dec
 
-        ;; Check if plaintext_len == 0
+        ;; Check if msg_len == 0
         cmp     arg5, 0
-        jz      exit_update_dec
+        jz      error_update_dec
 
-        ;; Check out != NULL (plaintext_len != 0)
+        ;; Check if msg_len > max_len
+        cmp     arg5, GCM_MAX_LENGTH
+        ja      error_update_dec
+
+        ;; Check out != NULL (msg_len != 0)
         cmp     arg3, 0
-        jz      exit_update_dec
+        jz      error_update_dec
 
-        ;; Check in != NULL (plaintext_len != 0)
+        ;; Check in != NULL (msg_len != 0)
         cmp     arg4, 0
-        jz      exit_update_dec
+        jz      error_update_dec
 %endif
 
         GCM_ENC_DEC arg1, arg2, arg3, arg4, arg5, DEC, multi_call
@@ -228,6 +346,37 @@ FN_NAME(dec,_update_):
 exit_update_dec:
         FUNC_RESTORE
         ret
+
+%ifdef SAFE_PARAM
+error_update_dec:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
+
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Check context_data != NULL
+        IMB_ERR_CHECK_NULL arg2, rax, IMB_ERR_NULL_CTX
+
+        ;; Check if plaintext_len == 0
+        cmp     arg5, 0
+        jz      skip_in_out_check_error_update_dec
+
+        ;; Check if msg_len > max_len
+        IMB_ERR_CHECK_ABOVE arg5, GCM_MAX_LENGTH, rax, IMB_ERR_CIPH_LEN
+
+        ;; Check out != NULL
+        IMB_ERR_CHECK_NULL arg3, rax, IMB_ERR_NULL_DST
+
+        ;; Check in != NULL (plaintext_len != 0)
+        IMB_ERR_CHECK_NULL arg4, rax, IMB_ERR_NULL_SRC
+
+skip_in_out_check_error_update_dec:
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+        jmp     exit_update_dec
+%endif
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;void   aes_gcm_enc_128_finalize_vaes_avx512 / aes_gcm_enc_192_finalize_vaes_avx512 /
@@ -242,24 +391,27 @@ FN_NAME(enc,_finalize_):
         endbranch64
 ;; All parameters are passed through registers
 %ifdef SAFE_PARAM
+        ;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+
         ;; Check key_data != NULL
         cmp     arg1, 0
-        jz      exit_enc_fin
+        jz      error_enc_fin
 
         ;; Check context_data != NULL
         cmp     arg2, 0
-        jz      exit_enc_fin
+        jz      error_enc_fin
 
         ;; Check auth_tag != NULL
         cmp     arg3, 0
-        jz      exit_enc_fin
+        jz      error_enc_fin
 
         ;; Check auth_tag_len == 0 or > 16
         cmp     arg4, 0
-        jz      exit_enc_fin
+        jz      error_enc_fin
 
         cmp     arg4, 16
-        ja      exit_enc_fin
+        ja      error_enc_fin
 %endif
 
         FUNC_SAVE
@@ -269,6 +421,31 @@ FN_NAME(enc,_finalize_):
 
 exit_enc_fin:
         ret
+
+%ifdef SAFE_PARAM
+error_enc_fin:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
+
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Check context_data != NULL
+        IMB_ERR_CHECK_NULL arg2, rax, IMB_ERR_NULL_CTX
+
+        ;; Check auth_tag != NULL
+        IMB_ERR_CHECK_NULL arg3, rax, IMB_ERR_NULL_AUTH
+
+        ;; Check auth_tag_len == 0 or > 16
+        IMB_ERR_CHECK_ZERO arg4, rax, IMB_ERR_AUTH_TAG_LEN
+
+        IMB_ERR_CHECK_ABOVE arg4, 16, rax, IMB_ERR_AUTH_TAG_LEN
+
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+        jmp     exit_enc_fin
+%endif
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;void   aes_gcm_dec_128_finalize_vaes_avx512 / aes_gcm_dec_192_finalize_vaes_avx512
@@ -283,24 +460,27 @@ FN_NAME(dec,_finalize_):
         endbranch64
 ;; All parameters are passed through registers
 %ifdef SAFE_PARAM
+        ;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+
         ;; Check key_data != NULL
         cmp     arg1, 0
-        jz      exit_dec_fin
+        jz      error_dec_fin
 
         ;; Check context_data != NULL
         cmp     arg2, 0
-        jz      exit_dec_fin
+        jz      error_dec_fin
 
         ;; Check auth_tag != NULL
         cmp     arg3, 0
-        jz      exit_dec_fin
+        jz      error_dec_fin
 
         ;; Check auth_tag_len == 0 or > 16
         cmp     arg4, 0
-        jz      exit_dec_fin
+        jz      error_dec_fin
 
         cmp     arg4, 16
-        ja      exit_dec_fin
+        ja      error_dec_fin
 %endif
 
         FUNC_SAVE
@@ -311,9 +491,30 @@ FN_NAME(dec,_finalize_):
 exit_dec_fin:
         ret
 
+%ifdef SAFE_PARAM
+error_dec_fin:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
 
-%ifdef LINUX
-section .note.GNU-stack noalloc noexec nowrite progbits
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Check context_data != NULL
+        IMB_ERR_CHECK_NULL arg2, rax, IMB_ERR_NULL_CTX
+
+        ;; Check auth_tag != NULL
+        IMB_ERR_CHECK_NULL arg3, rax, IMB_ERR_NULL_AUTH
+
+        ;; Check auth_tag_len == 0 or > 16
+        IMB_ERR_CHECK_ZERO arg4, rax, IMB_ERR_AUTH_TAG_LEN
+
+        IMB_ERR_CHECK_ABOVE arg4, 16, rax, IMB_ERR_AUTH_TAG_LEN
+
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+        jmp     exit_dec_fin
 %endif
+
+mksection stack-noexec
 
 %endif ; GCM_SGL_API_VAES_AVX512_INC

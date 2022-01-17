@@ -48,7 +48,7 @@
 %define ZUC_CIPHER_4      asm_ZucCipher_4_sse
 %endif
 
-section .data
+mksection .rodata
 default rel
 
 align 16
@@ -88,6 +88,16 @@ dd      0xFFFFFFFF, 0x00000000, 0xFFFFFFFF, 0xFFFFFFFF
 dd      0x00000000, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
 dd      0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
 
+select_bits_mask:
+dq      0x3f
+dq      0xfc0
+dq      0x3f000
+dq      0xfc0000
+dq      0x3f000000
+dq      0xfc0000000
+dq      0x3f000000000
+dq      0xfc0000000000
+
 extern ZUC_EIA3_4_BUFFER
 extern ZUC256_EIA3_4_BUFFER
 extern ZUC128_INIT_4
@@ -101,13 +111,15 @@ extern ZUC_CIPHER_4
 %define arg4    rcx
 %define arg5    r8
 %define arg6    r9
+%define arg7    qword [rsp]
 %else
 %define arg1    rcx
 %define arg2    rdx
 %define arg3    r8
 %define arg4    r9
-%define arg5    [rsp + 32]
-%define arg6    [rsp + 40]
+%define arg5    qword [rsp + 32]
+%define arg6    qword [rsp + 40]
+%define arg7    qword [rsp + 48]
 %endif
 
 %define state   arg1
@@ -123,7 +135,7 @@ _null_len_save: resq    1
 _rsp_save:      resq    1
 endstruc
 
-section .text
+mksection .text
 
 %define APPEND(a,b) a %+ b
 %define APPEND3(a,b,c) a %+ b %+ c
@@ -174,6 +186,32 @@ section .text
 
 %endmacro
 
+;; Read 8x6 bits and store them as 8 partial bytes
+;; (using 6 least significant bits)
+%macro EXPAND_FROM_6_TO_8_BYTES 3
+%define %%IN_OUT        %1 ; [in/out] Input/output GP register
+%define %%INPUT_COPY    %2 ; [clobbered] Temporary GP register
+%define %%TMP           %3 ; [clobbered] Temporary GP register
+
+        mov     %%INPUT_COPY, %%IN_OUT
+        mov     %%TMP, %%INPUT_COPY
+        ; Read bits [5:0] from input
+        and     %%TMP, [rel select_bits_mask]
+        ; Store bits [7:0] in output
+        mov     %%IN_OUT, %%TMP
+
+%assign %%i 1
+%rep 7
+        mov     %%TMP, %%INPUT_COPY
+        ; Read bits [6*i + 5 : 6*i] from input
+        and     %%TMP, [rel select_bits_mask + 8*%%i]
+        ; Store bits [8*i + 7 : 8*i] in output
+        shl     %%TMP, (2*%%i)
+        or      %%IN_OUT, %%TMP
+%assign %%i (%%i + 1)
+%endrep
+%endmacro
+
 %macro SUBMIT_JOB_ZUC_EEA3 1
 %define %%KEY_SIZE      %1 ; [constant] Key size (128 or 256)
 
@@ -210,7 +248,43 @@ section .text
         movzx   lane, BYTE(unused_lanes)
         shr     unused_lanes, 8
         mov     tmp, [job + _iv]
-        mov     [state + _zuc_args_IV + lane*8], tmp
+        shl     lane, 5
+%if %%KEY_SIZE == 128
+        ; Read first 16 bytes of IV
+        movdqu  xmm0, [tmp]
+        movdqa  [state + _zuc_args_IV + lane], xmm0
+%else ;; %%KEY_SIZE == 256
+        cmp     qword [job + _iv_len_in_bytes], 25
+        je      %%_iv_size_25
+%%_iv_size_23:
+        ; Read 23 bytes of IV and expand to 25 bytes
+        ; then expand the last 6 bytes to 8 bytes
+
+        ; Read and write first 16 bytes
+        movdqu  xmm0, [tmp]
+        movdqa  [state + _zuc_args_IV + lane], xmm0
+        ; Read and write next byte
+        mov     al, [tmp + 16]
+        mov     [state + _zuc_args_IV + lane + 16], al
+        ; Read next 6 bytes and write as 8 bytes
+        movzx   DWORD(tmp2), word [tmp + 17]
+        mov     DWORD(tmp3), [tmp + 19]
+        shl     tmp2, 32
+        or      tmp2, tmp3
+        EXPAND_FROM_6_TO_8_BYTES tmp2, tmp, tmp3
+        mov     [state + _zuc_args_IV + lane + 17], tmp2
+
+        jmp     %%_iv_read
+%%_iv_size_25:
+        ; Read 25 bytes of IV
+        movdqu  xmm0, [tmp]
+        movdqa  [state + _zuc_args_IV + lane], xmm0
+        movq    xmm0, [tmp + 16]
+        pinsrb  xmm0, [tmp + 24], 8
+        movdqa  [state + _zuc_args_IV + lane + 16], xmm0
+%%_iv_read:
+%endif
+        shr     lane, 5
         mov     [state + _zuc_unused_lanes], unused_lanes
 
         mov     [state + _zuc_job_in_lane + lane*8], job
@@ -262,26 +336,21 @@ section .text
 
         ;; If Windows, reserve memory in stack for parameter transferring
 %ifndef LINUX
-        ;; 24 bytes for 3 parameters
-        sub     rsp, 24
+        ;; 40 bytes for 5 parameters
+        sub     rsp, 8*5
 %endif
         lea     arg1, [r12 + _zuc_args_keys]
         lea     arg2, [r12 + _zuc_args_IV]
         lea     arg3, [r12 + _zuc_state]
-%if %%KEY_SIZE == 256
-        ;; Setting "tag size" to 2 in case of ciphering
-        ;; (dummy size, just for constant selecion at Initialization)
-        mov     arg4, 2
-%endif
-
 %if %%KEY_SIZE == 128
         call    ZUC128_INIT_4
 %else
+        mov     arg5, 0 ; Tag size = 0, arg4 not used
         call    ZUC256_INIT_4
 %endif
 
 %ifndef LINUX
-        add     rsp, 24
+        add     rsp, 8*5
 %endif
 
         cmp     byte [r12 + _zuc_init_not_done], 0x0f ; Init done for all lanes
@@ -379,7 +448,6 @@ section .text
         jmp     %%return_submit_eea3
 %endmacro
 
-
 %macro FLUSH_JOB_ZUC_EEA3 1
 %define %%KEY_SIZE      %1 ; [constant] Key size (128 or 256)
 
@@ -448,7 +516,6 @@ APPEND(%%skip_copy_ffs_,I):
         mov     tmp1, [state + _zuc_args_in + idx*8]
         mov     tmp2, [state + _zuc_args_out + idx*8]
         mov     tmp3, [state + _zuc_args_keys + idx*8]
-        mov     tmp4, [state + _zuc_args_IV + idx*8]
 
 %assign I 0
 %rep 4
@@ -457,7 +524,6 @@ APPEND(%%skip_copy_ffs_,I):
         mov     [state + _zuc_args_in + I*8], tmp1
         mov     [state + _zuc_args_out + I*8], tmp2
         mov     [state + _zuc_args_keys + I*8], tmp3
-        mov     [state + _zuc_args_IV + I*8], tmp4
 APPEND(%%skip_eea3_,I):
 %assign I (I+1)
 %endrep
@@ -478,26 +544,22 @@ APPEND(%%skip_eea3_,I):
 
         ;; If Windows, reserve memory in stack for parameter transferring
 %ifndef LINUX
-        ;; 24 bytes for 3 parameters
-        sub     rsp, 24
+        ;; 40 bytes for 5 parameters
+        sub     rsp, 8*5
 %endif
         lea     arg1, [r12 + _zuc_args_keys]
         lea     arg2, [r12 + _zuc_args_IV]
         lea     arg3, [r12 + _zuc_state]
-%if %%KEY_SIZE == 256
-        ;; Setting "tag size" to 2 in case of ciphering
-        ;; (dummy size, just for constant selecion at Initialization)
-        mov     arg4, 2
-%endif
 
 %if %%KEY_SIZE == 128
         call    ZUC128_INIT_4
 %else
+        mov     arg5, 0 ; Tag size = 0, arg4 not used
         call    ZUC256_INIT_4
 %endif
 
 %ifndef LINUX
-        add     rsp, 24
+        add     rsp, 8*5
 %endif
         cmp     word [r12 + _zuc_init_not_done], 0x0f ; Init done for all lanes
         je      %%skip_flush_restoring_state
@@ -655,7 +717,6 @@ FLUSH_JOB_ZUC256_EEA3:
         endbranch64
         FLUSH_JOB_ZUC_EEA3 256
 
-
 %macro SUBMIT_JOB_ZUC_EIA3 1
 %define %%KEY_SIZE      %1 ; [constant] Key size (128 or 256)
 
@@ -663,6 +724,8 @@ FLUSH_JOB_ZUC256_EEA3:
 %define len              rbp
 %define idx              rbp
 %define tmp              rbp
+%define tmp2             r14
+%define tmp3             r15
 
 %define lane             r8
 %define unused_lanes     rbx
@@ -690,7 +753,43 @@ FLUSH_JOB_ZUC256_EEA3:
         movzx   lane, BYTE(unused_lanes)
         shr     unused_lanes, 8
         mov     tmp, [job + _zuc_eia3_iv]
-        mov     [state + _zuc_args_IV + lane*8], tmp
+        shl     lane, 5
+%if %%KEY_SIZE == 128
+        ; Read first 16 bytes of IV
+        movdqu  xmm0, [tmp]
+        movdqa  [state + _zuc_args_IV + lane], xmm0
+%else ;; %%KEY_SIZE == 256
+        or      tmp, tmp
+        jnz     %%_iv_size_25
+%%_iv_size_23:
+        ; Read 23 bytes of IV and expand to 25 bytes
+        ; then expand the last 6 bytes to 8 bytes
+        mov     tmp, [job + _zuc_eia3_iv23]
+        ; Read and write first 16 bytes
+        movdqu  xmm0, [tmp]
+        movdqa  [state + _zuc_args_IV + lane], xmm0
+        ; Read and write next byte
+        mov     al, [tmp + 16]
+        mov     [state + _zuc_args_IV + lane + 16], al
+        ; Read next 6 bytes and write as 8 bytes
+        movzx   DWORD(tmp2), word [tmp + 17]
+        mov     DWORD(tmp3), [tmp + 19]
+        shl     tmp2, 32
+        or      tmp2, tmp3
+        EXPAND_FROM_6_TO_8_BYTES tmp2, tmp, tmp3
+        mov     [state + _zuc_args_IV + lane + 17], tmp2
+
+        jmp     %%_iv_read
+%%_iv_size_25:
+        ; Read 25 bytes of IV
+        movdqu  xmm0, [tmp]
+        movdqa  [state + _zuc_args_IV + lane], xmm0
+        movq    xmm0, [tmp + 16]
+        pinsrb  xmm0, [tmp + 24], 8
+        movdqa  [state + _zuc_args_IV + lane + 16], xmm0
+%%_iv_read:
+%endif
+        shr     lane, 5
         mov     [state + _zuc_unused_lanes], unused_lanes
 
         mov     [state + _zuc_job_in_lane + lane*8], job
@@ -724,11 +823,22 @@ FLUSH_JOB_ZUC256_EEA3:
         ; to pass parameter to next function
         mov     r11, state
 
+%if %%KEY_SIZE == 128
         ;; If Windows, reserve memory in stack for parameter transferring
 %ifndef LINUX
         ;; 48 bytes for 6 parameters (already aligned to 16 bytes)
         sub     rsp, 48
 %endif
+%else ; %%KEY_SIZE == 256
+%ifndef LINUX
+        ;; 56 bytes for 7 parameters
+        sub     rsp, 8*7
+%else
+        ;; 8 bytes for one extra parameter (apart from first 6)
+        sub     rsp, 8
+%endif
+%endif ;; %%KEY_SIZE
+
         lea     arg1, [r11 + _zuc_args_keys]
         lea     arg2, [r11 + _zuc_args_IV]
         lea     arg3, [r11 + _zuc_args_in]
@@ -742,6 +852,9 @@ FLUSH_JOB_ZUC256_EEA3:
         lea     r12, [r11 + _zuc_job_in_lane]
         mov     arg6, r12
 %endif
+%if %%KEY_SIZE == 256
+        mov     arg7, 4
+%endif
 
 %if %%KEY_SIZE == 128
         call    ZUC_EIA3_4_BUFFER
@@ -749,9 +862,17 @@ FLUSH_JOB_ZUC256_EEA3:
         call    ZUC256_EIA3_4_BUFFER
 %endif
 
+%if %%KEY_SIZE == 128
 %ifndef LINUX
         add     rsp, 48
 %endif
+%else ;; %%KEY_SIZE == 256
+%ifndef LINUX
+        add     rsp, 8*7
+%else
+        add     rsp, 8
+%endif
+%endif ;; %%KEY_SIZE
         mov     state, [rsp + _gpr_save + 8*8]
         mov     job,   [rsp + _gpr_save + 8*9]
 
@@ -842,7 +963,6 @@ FLUSH_JOB_ZUC256_EEA3:
         mov     tmp1, [state + _zuc_args_in + idx*8]
         mov     tmp2, [state + _zuc_args_out + idx*8]
         mov     tmp3, [state + _zuc_args_keys + idx*8]
-        mov     tmp4, [state + _zuc_args_IV + idx*8]
         mov     WORD(tmp5), [state + _zuc_lens + idx*2]
 
         ; Set valid length in NULL jobs
@@ -872,7 +992,6 @@ FLUSH_JOB_ZUC256_EEA3:
         mov     [state + _zuc_args_in + I*8], tmp1
         mov     [state + _zuc_args_out + I*8], tmp2
         mov     [state + _zuc_args_keys + I*8], tmp3
-        mov     [state + _zuc_args_IV + I*8], tmp4
 APPEND(%%skip_eia3_,I):
 %assign I (I+1)
 %endrep
@@ -881,10 +1000,21 @@ APPEND(%%skip_eia3_,I):
         ; to pass parameter to next function
         mov     r11, state
 
+%if %%KEY_SIZE == 128
+        ;; If Windows, reserve memory in stack for parameter transferring
 %ifndef LINUX
         ;; 48 bytes for 6 parameters (already aligned to 16 bytes)
         sub     rsp, 48
 %endif
+%else ; %%KEY_SIZE == 256
+%ifndef LINUX
+        ;; 56 bytes for 7 parameters
+        sub     rsp, 8*7
+%else
+        ;; 8 bytes for one extra parameter (apart from first 6)
+        sub     rsp, 8
+%endif
+%endif ;; %%KEY_SIZE
         lea     arg1, [r11 + _zuc_args_keys]
         lea     arg2, [r11 + _zuc_args_IV]
         lea     arg3, [r11 + _zuc_args_in]
@@ -898,6 +1028,9 @@ APPEND(%%skip_eia3_,I):
         lea     r12, [r11 + _zuc_job_in_lane]
         mov     arg6, r12
 %endif
+%if %%KEY_SIZE == 256
+        mov     arg7, 4
+%endif
 
 %if %%KEY_SIZE == 128
         call    ZUC_EIA3_4_BUFFER
@@ -905,10 +1038,17 @@ APPEND(%%skip_eia3_,I):
         call    ZUC256_EIA3_4_BUFFER
 %endif
 
-
+%if %%KEY_SIZE == 128
 %ifndef LINUX
         add     rsp, 48
 %endif
+%else ;; %%KEY_SIZE == 256
+%ifndef LINUX
+        add     rsp, 8*7
+%else
+        add     rsp, 8
+%endif
+%endif ;; %%KEY_SIZE
 
         mov	tmp5, [rsp + _null_len_save]
         mov     state, [rsp + _gpr_save + 8*8]
@@ -978,6 +1118,4 @@ FLUSH_JOB_ZUC256_EIA3:
         endbranch64
         FLUSH_JOB_ZUC_EIA3 256
 
-%ifdef LINUX
-section .note.GNU-stack noalloc noexec nowrite progbits
-%endif
+mksection stack-noexec

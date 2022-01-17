@@ -48,6 +48,7 @@ enum {
       TEST_AUTH_TAG_OUTPUT_LEN_ZERO,
       TEST_AUTH_MSG_LEN_ZERO,
       TEST_AUTH_MSG_LEN_GT_MAX,
+      TEST_AUTH_IV_LEN,
       TEST_CIPH_SRC_NULL = 200,
       TEST_CIPH_DST_NULL,
       TEST_CIPH_IV_NULL,
@@ -56,6 +57,8 @@ enum {
       TEST_CIPH_MSG_LEN_ZERO,
       TEST_CIPH_MSG_LEN_GT_MAX,
       TEST_CIPH_NEXT_IV_NULL,
+      TEST_CIPH_IV_LEN,
+      TEST_INVALID_PON_PLI = 300,
 };
 
 /*
@@ -221,11 +224,18 @@ fill_in_job(struct IMB_JOB *job,
                 4,  /* IMB_AUTH_CRC6_IUUP_HEADER */
         };
         static DECLARE_ALIGNED(uint8_t dust_bin[2048], 64);
+        static void *ks_ptrs[3];
         const uint64_t msg_len_to_cipher = 32;
         const uint64_t msg_len_to_hash = 48;
 
         if (job == NULL)
                 return;
+
+        /*
+         * Some algs use src data for checks e.g. PON PLI check
+         * Fill buffer with invalid data
+         */
+        memset(dust_bin, 0xff, sizeof(dust_bin));
 
         memset(job, 0, sizeof(*job));
         job->chain_order = chain_order;
@@ -248,6 +258,8 @@ fill_in_job(struct IMB_JOB *job,
         case IMB_CIPHER_CBCS_1_9:
                 job->key_len_in_bytes = UINT64_C(16);
                 job->iv_len_in_bytes = UINT64_C(16);
+                if (job->cipher_mode == IMB_CIPHER_CBCS_1_9)
+                        job->cipher_fields.CBCS.next_iv = dust_bin;
                 break;
         case IMB_CIPHER_CNTR:
         case IMB_CIPHER_CNTR_BITLEN:
@@ -262,6 +274,7 @@ fill_in_job(struct IMB_JOB *job,
                 job->iv_len_in_bytes = UINT64_C(16);
                 break;
         case IMB_CIPHER_GCM:
+                job->hash_alg = IMB_AUTH_AES_GMAC;
                 job->key_len_in_bytes = UINT64_C(16);
                 job->iv_len_in_bytes = UINT64_C(12);
                 break;
@@ -284,12 +297,25 @@ fill_in_job(struct IMB_JOB *job,
         case IMB_CIPHER_DES3:
                 job->key_len_in_bytes = UINT64_C(24);
                 job->iv_len_in_bytes = UINT64_C(8);
+                ks_ptrs[0] = dust_bin;
+                ks_ptrs[1] = dust_bin;
+                ks_ptrs[2] = dust_bin;
+                job->enc_keys = ks_ptrs;
+                job->dec_keys = ks_ptrs;
                 break;
         case IMB_CIPHER_PON_AES_CNTR:
                 job->dst = dust_bin + 8;
                 job->hash_alg = IMB_AUTH_PON_CRC_BIP;
                 job->key_len_in_bytes = 16;
                 job->iv_len_in_bytes = 16;
+
+                /* create XGEM header template */
+                const uint64_t pli =
+                        (msg_len_to_cipher << 2) & 0xffff;
+                uint64_t *ptr64 = (uint64_t *) dust_bin;
+
+                ptr64[0] = ((pli >> 8) & 0xff) |
+                                ((pli & 0xff) << 8);
                 break;
         case IMB_CIPHER_ECB:
                 job->key_len_in_bytes = UINT64_C(16);
@@ -342,11 +368,14 @@ fill_in_job(struct IMB_JOB *job,
 
         switch (job->hash_alg) {
         case IMB_AUTH_HMAC_SHA_1:
-        case IMB_AUTH_MD5:
         case IMB_AUTH_HMAC_SHA_224:
         case IMB_AUTH_HMAC_SHA_256:
         case IMB_AUTH_HMAC_SHA_384:
         case IMB_AUTH_HMAC_SHA_512:
+        case IMB_AUTH_MD5:
+                job->u.HMAC._hashed_auth_key_xor_ipad = dust_bin;
+                job->u.HMAC._hashed_auth_key_xor_opad = dust_bin;
+                break;
         case IMB_AUTH_SHA_1:
         case IMB_AUTH_SHA_224:
         case IMB_AUTH_SHA_256:
@@ -594,6 +623,7 @@ check_aead(IMB_HASH_ALG hash, IMB_CIPHER_MODE cipher)
 {
         if (hash == IMB_AUTH_CHACHA20_POLY1305 ||
             hash == IMB_AUTH_CHACHA20_POLY1305_SGL ||
+            hash == IMB_AUTH_DOCSIS_CRC32 ||
             hash == IMB_AUTH_GCM_SGL ||
             hash == IMB_AUTH_AES_GMAC ||
             hash == IMB_AUTH_AES_CCM ||
@@ -603,6 +633,7 @@ check_aead(IMB_HASH_ALG hash, IMB_CIPHER_MODE cipher)
 
         if (cipher == IMB_CIPHER_CHACHA20_POLY1305 ||
             cipher == IMB_CIPHER_CHACHA20_POLY1305_SGL ||
+            cipher == IMB_CIPHER_DOCSIS_SEC_BPI ||
             cipher == IMB_CIPHER_GCM_SGL ||
             cipher == IMB_CIPHER_GCM ||
             cipher == IMB_CIPHER_CCM ||
@@ -852,6 +883,44 @@ test_job_invalid_mac_args(struct IMB_MGR *mb_mgr)
                                 printf(".");
                         }
 
+        /*
+         * Invalid auth IV length test
+         */
+        for (order = IMB_ORDER_CIPHER_HASH; order <= IMB_ORDER_HASH_CIPHER;
+             order++)
+                for (dir = IMB_DIR_ENCRYPT; dir <= IMB_DIR_DECRYPT; dir++)
+                        for (hash = IMB_AUTH_HMAC_SHA_1;
+                             hash < IMB_AUTH_NUM; hash++) {
+                                IMB_JOB *job = &template_job;
+
+                                fill_in_job(job, cipher, dir,
+                                            hash, order, &chacha_ctx,
+                                            &gcm_ctx);
+                                /*
+                                 * Set invalid IV lengths
+                                 * for relevant algos
+                                 */
+                                switch (hash) {
+                                        /* GMAC IVs must be not be 0 bytes */
+                                case IMB_AUTH_AES_GMAC_128:
+                                case IMB_AUTH_AES_GMAC_192:
+                                case IMB_AUTH_AES_GMAC_256:
+                                        job->u.GMAC.iv_len_in_bytes = 0;
+                                        break;
+                                default:
+                                        /*
+                                         * Skip other algos
+                                         */
+                                        continue;
+                                }
+                                if (!is_submit_invalid(mb_mgr, job,
+                                                       TEST_AUTH_IV_LEN,
+                                                       IMB_ERR_JOB_IV_LEN))
+                                        return 1;
+                                printf(".");
+                        }
+
+
         /* clean up */
         while (IMB_FLUSH_JOB(mb_mgr) != NULL)
                 ;
@@ -955,6 +1024,10 @@ test_job_invalid_cipher_args(struct IMB_MGR *mb_mgr)
                                  * algorithms, as the test is for cipher
                                  * only algorithms */
                                 if (check_aead(hash, cipher))
+                                        continue;
+
+                                /* Skip AES-ECB, as it doesn't use any IV */
+                                if (cipher == IMB_CIPHER_ECB)
                                         continue;
 
                                 fill_in_job(&template_job, cipher, dir,
@@ -1193,6 +1266,140 @@ test_job_invalid_cipher_args(struct IMB_MGR *mb_mgr)
                         }
 
         /*
+         * Invalid cipher IV length tests
+         */
+        const struct invalid_cipher_iv_params {
+                IMB_CIPHER_MODE cipher_mode;
+                uint64_t invalid_iv_len;
+        } invalid_iv_lens[] = {
+                /* IVs must be 16 bytes */
+                { IMB_CIPHER_CBC, 15 },
+                { IMB_CIPHER_CBC, 17 },
+                { IMB_CIPHER_CBCS_1_9, 15 },
+                { IMB_CIPHER_CBCS_1_9, 17 },
+                { IMB_CIPHER_DOCSIS_SEC_BPI, 15 },
+                { IMB_CIPHER_DOCSIS_SEC_BPI, 17 },
+                { IMB_CIPHER_CNTR_BITLEN, 15 },
+                { IMB_CIPHER_CNTR_BITLEN, 17 },
+                { IMB_CIPHER_PON_AES_CNTR, 15 },
+                { IMB_CIPHER_PON_AES_CNTR, 17 },
+                { IMB_CIPHER_SNOW3G_UEA2_BITLEN, 15 },
+                { IMB_CIPHER_SNOW3G_UEA2_BITLEN, 17 },
+                { IMB_CIPHER_SNOW_V_AEAD, 15 },
+                { IMB_CIPHER_SNOW_V_AEAD, 17 },
+                { IMB_CIPHER_SNOW_V, 15 },
+                { IMB_CIPHER_SNOW_V, 17 },
+                /* CCM IV must be 13 to 7 bytes */
+                { IMB_CIPHER_CCM, 6 },
+                { IMB_CIPHER_CCM, 14 },
+                /* ECB IV must be 0 bytes */
+                { IMB_CIPHER_ECB, 1 },
+                { IMB_CIPHER_ECB, -1 },
+                /* CNTR IV must be 12 or 16 bytes */
+                { IMB_CIPHER_CNTR, 11 },
+                { IMB_CIPHER_CNTR, 14 },
+                { IMB_CIPHER_CNTR, 17 },
+                /* DES IVs must be 8 bytes */
+                { IMB_CIPHER_DES, 7 },
+                { IMB_CIPHER_DES, 9 },
+                { IMB_CIPHER_DOCSIS_DES, 7 },
+                { IMB_CIPHER_DOCSIS_DES, 9 },
+                { IMB_CIPHER_DES3, 7 },
+                { IMB_CIPHER_DES3, 9 },
+                /* KASUMI IV must be 8 bytes */
+                { IMB_CIPHER_KASUMI_UEA1_BITLEN, 7 },
+                { IMB_CIPHER_KASUMI_UEA1_BITLEN, 9 },
+                /* ZUC IV must be 16, 23 or 25 bytes */
+                { IMB_CIPHER_ZUC_EEA3, 15 },
+                { IMB_CIPHER_ZUC_EEA3, 17 },
+                { IMB_CIPHER_ZUC_EEA3, 22 },
+                { IMB_CIPHER_ZUC_EEA3, 24 },
+                { IMB_CIPHER_ZUC_EEA3, 26 },
+                /* CHACHA20 IVs must be 12 bytes */
+                { IMB_CIPHER_CHACHA20, 15 },
+                { IMB_CIPHER_CHACHA20, 17 },
+                { IMB_CIPHER_CHACHA20_POLY1305, 15 },
+                { IMB_CIPHER_CHACHA20_POLY1305, 17 },
+                { IMB_CIPHER_CHACHA20_POLY1305_SGL, 15 },
+                { IMB_CIPHER_CHACHA20_POLY1305_SGL, 17 },
+                /* GCM IVs must be not be 0 bytes */
+                { IMB_CIPHER_GCM, 0 },
+                { IMB_CIPHER_GCM_SGL, 0 },
+        };
+
+        dir = IMB_DIR_ENCRYPT;
+
+        for (order = IMB_ORDER_CIPHER_HASH; order <= IMB_ORDER_HASH_CIPHER;
+             order++) {
+                uint64_t key_len;
+
+                for (key_len = IMB_KEY_128_BYTES; key_len <= IMB_KEY_256_BYTES;
+                     key_len += 8) {
+                        uint32_t i;
+
+                        for (i = 0; i < DIM(invalid_iv_lens); i++) {
+                                IMB_JOB *job = &template_job;
+
+                                /* set cipher mode */
+                                cipher = invalid_iv_lens[i].cipher_mode;
+
+                                /* set up job fields */
+                                fill_in_job(job, cipher, dir, hash, order,
+                                            &chacha_ctx, &gcm_ctx);
+
+                                /* set key length */
+                                job->key_len_in_bytes = key_len;
+
+                                /* set invalid IV length */
+                                job->iv_len_in_bytes =
+                                        invalid_iv_lens[i].invalid_iv_len;
+
+                                /* skip some key lengths for specific ciphers */
+                                switch (cipher) {
+                                case IMB_CIPHER_CCM:
+                                case IMB_CIPHER_DOCSIS_SEC_BPI:
+                                case IMB_CIPHER_ZUC_EEA3:
+                                        if (key_len == IMB_KEY_192_BYTES)
+                                                continue;
+                                        break;
+                                case IMB_CIPHER_DES:
+                                case IMB_CIPHER_DOCSIS_DES:
+                                        /* override default key len for DES */
+                                        job->key_len_in_bytes = 8;
+                                        break;
+                                case IMB_CIPHER_DES3:
+                                        if (key_len != IMB_KEY_192_BYTES)
+                                                continue;
+                                        break;
+                                case IMB_CIPHER_CHACHA20:
+                                case IMB_CIPHER_CHACHA20_POLY1305:
+                                case IMB_CIPHER_CHACHA20_POLY1305_SGL:
+                                case IMB_CIPHER_SNOW_V_AEAD:
+                                case IMB_CIPHER_SNOW_V:
+                                        if (key_len != IMB_KEY_256_BYTES)
+                                                continue;
+                                        break;
+                                case IMB_CIPHER_CBCS_1_9:
+                                case IMB_CIPHER_PON_AES_CNTR:
+                                case IMB_CIPHER_SNOW3G_UEA2_BITLEN:
+                                case IMB_CIPHER_KASUMI_UEA1_BITLEN:
+                                        if (key_len != IMB_KEY_128_BYTES)
+                                                continue;
+                                        break;
+                                default:
+                                        break;
+                                }
+
+                                if (!is_submit_invalid(mb_mgr, job,
+                                                       TEST_CIPH_IV_LEN,
+                                                       IMB_ERR_JOB_IV_LEN))
+                                        return 1;
+                                printf(".");
+                        }
+                }
+        }
+
+        /*
          * OTHER MISC TESTS
          */
 
@@ -1231,6 +1438,289 @@ test_job_invalid_cipher_args(struct IMB_MGR *mb_mgr)
         return 0;
 }
 
+/*
+ * @brief Tests misc invalid settings
+ */
+static int
+test_job_invalid_misc_args(struct IMB_MGR *mb_mgr)
+{
+        IMB_HASH_ALG hash;
+        IMB_CIPHER_DIRECTION dir;
+        IMB_CIPHER_MODE cipher = IMB_CIPHER_NULL;
+        IMB_CHAIN_ORDER order;
+        struct IMB_JOB template_job;
+        struct chacha20_poly1305_context_data chacha_ctx;
+        struct gcm_context_data gcm_ctx;
+
+	printf("Invalid MISC JOB arguments test:\n");
+
+        /* prep */
+        while (IMB_FLUSH_JOB(mb_mgr) != NULL)
+                ;
+
+        /*
+         * Invalid PLI for PON
+         */
+        for (order = IMB_ORDER_CIPHER_HASH; order <= IMB_ORDER_HASH_CIPHER;
+             order++)
+                for (dir = IMB_DIR_ENCRYPT; dir <= IMB_DIR_DECRYPT; dir++) {
+                        cipher = IMB_CIPHER_PON_AES_CNTR;
+                        hash = IMB_AUTH_PON_CRC_BIP;
+
+                        /*
+                         * XGEM header is set to all 1s in fill_in_job()
+                         * This will result in an invalid PLI field
+                         */
+                        fill_in_job(&template_job, cipher, dir,
+                                    hash, order, &chacha_ctx,
+                                    &gcm_ctx);
+
+                        /* Set msg len to ensure PLI error */
+                        template_job.msg_len_to_cipher_in_bytes = 8;
+
+                        if (!is_submit_invalid(mb_mgr, &template_job,
+                                               TEST_INVALID_PON_PLI,
+                                               IMB_ERR_JOB_PON_PLI))
+                                return 1;
+                        printf(".");
+                }
+
+
+        /*
+         * AEAD MSG_LEN > MAX
+         */
+        for (order = IMB_ORDER_CIPHER_HASH; order <= IMB_ORDER_HASH_CIPHER;
+             order++)
+                for (dir = IMB_DIR_ENCRYPT; dir <= IMB_DIR_DECRYPT; dir++)
+                        for (cipher = IMB_CIPHER_CBC;
+                             cipher < IMB_CIPHER_NUM; cipher++) {
+                                /* reset hash alg */
+                                hash = IMB_AUTH_NULL;
+
+                                /* Skip non AEAD algorithms */
+                                if (!check_aead(hash, cipher))
+                                        continue;
+
+                                IMB_JOB *job = &template_job;
+
+                                fill_in_job(job, cipher, dir, hash, order,
+                                            &chacha_ctx, &gcm_ctx);
+
+                                switch (cipher) {
+                                        /* skip algos with no max limit */
+                                case IMB_CIPHER_PON_AES_CNTR:
+                                case IMB_CIPHER_SNOW_V_AEAD:
+                                case IMB_CIPHER_CHACHA20_POLY1305:
+                                case IMB_CIPHER_CHACHA20_POLY1305_SGL:
+                                case IMB_CIPHER_CCM:
+                                        continue;
+                                case IMB_CIPHER_GCM:
+                                case IMB_CIPHER_GCM_SGL:
+                                        /* must be < ((2^39) - 256)  bytes */
+                                        job->msg_len_to_cipher_in_bytes =
+                                                ((1ULL << 39) - 256);
+                                        break;
+                                default:
+                                        continue;
+                                }
+                                if (!is_submit_invalid(mb_mgr, job,
+                                                       TEST_CIPH_MSG_LEN_GT_MAX,
+                                                       IMB_ERR_JOB_CIPH_LEN))
+                                        return 1;
+
+                                printf(".");
+                        }
+
+        /* clean up */
+        while (IMB_FLUSH_JOB(mb_mgr) != NULL)
+                ;
+
+        printf("\n");
+        return 0;
+}
+
+/*
+ * Submits a job and, if job is not returned straight away,
+ * MB_MGR function pointers are reset, but OOO manager contents
+ * should remain, so after a flush, a job should be retrieved.
+ */
+static int
+submit_reset_check_job(struct IMB_MGR *mb_mgr,
+                       IMB_CIPHER_MODE cipher, IMB_CIPHER_DIRECTION dir,
+                       IMB_HASH_ALG hash, IMB_CHAIN_ORDER order)
+{
+        struct IMB_JOB *job, *next_job;
+        struct chacha20_poly1305_context_data chacha_ctx;
+        struct gcm_context_data gcm_ctx;
+
+        job = IMB_GET_NEXT_JOB(mb_mgr);
+
+        fill_in_job(job, cipher, dir,
+                    hash, order, &chacha_ctx, &gcm_ctx);
+
+        next_job = IMB_SUBMIT_JOB(mb_mgr);
+
+        if (next_job == NULL) {
+                /*
+                 * If job is not retrieved, could mean
+                 * that the job is still in OOO managers
+                 * (due to a multi-buffer implementation)
+                 */
+
+                /*
+                 * Reset MB MGR pointers first and
+                 * check if job can be retrieved later
+                 */
+                if (imb_set_pointers_mb_mgr(mb_mgr, mb_mgr->flags, 0) == NULL)
+                        return 1;
+
+                next_job = IMB_FLUSH_JOB(mb_mgr);
+                if (next_job == NULL) {
+                        printf("Could not retrieve any job\n");
+                        return 1;
+                }
+        }
+
+        if (next_job->status != IMB_STATUS_COMPLETED) {
+                printf("Returned job's status is not completed\n");
+                printf("cipher = %u\n", cipher);
+                printf("imb errno = %u\n", mb_mgr->imb_errno);
+                exit(0);
+        }
+
+        return 0;
+}
+
+/*
+ * @brief Test reset API
+ */
+static int
+test_reset_api(struct IMB_MGR *mb_mgr)
+{
+        IMB_HASH_ALG hash;
+        IMB_CIPHER_DIRECTION dir;
+        IMB_CIPHER_MODE cipher;
+        IMB_CHAIN_ORDER order;
+
+	printf("Reset API test:\n");
+
+        /* prep */
+        while (IMB_FLUSH_JOB(mb_mgr) != NULL)
+                ;
+
+        /* Reset MB MGR pointers first */
+        if (imb_set_pointers_mb_mgr(mb_mgr, mb_mgr->flags, 0) == NULL)
+                return 1;
+
+        /* Loop around all cipher algorithms */
+        for (order = IMB_ORDER_CIPHER_HASH; order <= IMB_ORDER_HASH_CIPHER;
+             order++) {
+                for (dir = IMB_DIR_ENCRYPT; dir <= IMB_DIR_DECRYPT; dir++) {
+                        for (cipher = IMB_CIPHER_CBC;
+                             cipher < IMB_CIPHER_NUM; cipher++) {
+                                /* Cipher only */
+                                hash = IMB_AUTH_NULL;
+
+                                /*
+                                 * Skip cipher algorithms belonging to AEAD
+                                 * algorithms, as the test is for cipher
+                                 * only algorithms
+                                 */
+                                if (check_aead(hash, cipher))
+                                        continue;
+
+                                if (submit_reset_check_job(mb_mgr,
+                                                           cipher, dir,
+                                                           hash, order) > 0)
+                                        return 1;
+                        }
+                }
+        }
+        /* Loop around all authentication algorithms */
+        for (order = IMB_ORDER_CIPHER_HASH; order <= IMB_ORDER_HASH_CIPHER;
+             order++) {
+                for (dir = IMB_DIR_ENCRYPT; dir <= IMB_DIR_DECRYPT; dir++) {
+                        for (hash = IMB_AUTH_HMAC_SHA_1;
+                             hash < IMB_AUTH_NUM; hash++) {
+                                if (hash == IMB_AUTH_NULL ||
+                                    hash == IMB_AUTH_CUSTOM)
+                                        continue;
+
+                                /* Hash only */
+                                cipher = IMB_CIPHER_NULL;
+
+                                /*
+                                 * Skip hash algorithms belonging to AEAD
+                                 * algorithms, as the test is for authentication
+                                 * only algorithms
+                                 */
+                                if (check_aead(hash, cipher))
+                                        continue;
+
+                                if (submit_reset_check_job(mb_mgr,
+                                                           cipher, dir,
+                                                           hash, order) > 0)
+                                        return 1;
+                        }
+                }
+        }
+
+        /* Test AEAD algorithms */
+        IMB_HASH_ALG aead_hash_algos[] = {
+                IMB_AUTH_AES_GMAC,
+                IMB_AUTH_AES_CCM,
+                IMB_AUTH_CHACHA20_POLY1305,
+                IMB_AUTH_PON_CRC_BIP,
+                IMB_AUTH_DOCSIS_CRC32,
+                IMB_AUTH_SNOW_V_AEAD
+        };
+        IMB_CIPHER_MODE aead_cipher_algos[] = {
+                IMB_CIPHER_GCM,
+                IMB_CIPHER_CCM,
+                IMB_CIPHER_CHACHA20_POLY1305,
+                IMB_CIPHER_PON_AES_CNTR,
+                IMB_CIPHER_DOCSIS_SEC_BPI,
+                IMB_CIPHER_SNOW_V_AEAD
+        };
+
+        unsigned int i;
+
+        for (i = 0; i < DIM(aead_cipher_algos); i++) {
+                hash = aead_hash_algos[i];
+                cipher = aead_cipher_algos[i];
+
+                if (cipher == IMB_CIPHER_CCM ||
+                    cipher == IMB_CIPHER_DOCSIS_SEC_BPI)
+                        order = IMB_ORDER_HASH_CIPHER;
+                else
+                        order = IMB_ORDER_CIPHER_HASH;
+                dir = IMB_DIR_ENCRYPT;
+
+                if (submit_reset_check_job(mb_mgr, cipher,
+                                           dir, hash, order) > 0)
+                        return 1;
+
+                if (cipher == IMB_CIPHER_CCM ||
+                    cipher == IMB_CIPHER_DOCSIS_SEC_BPI)
+                        order = IMB_ORDER_CIPHER_HASH;
+                else
+                        order = IMB_ORDER_HASH_CIPHER;
+                dir = IMB_DIR_DECRYPT;
+
+                if (submit_reset_check_job(mb_mgr, cipher,
+                                           dir, hash, order) > 0)
+                        return 1;
+
+        }
+
+        /* clean up */
+        while (IMB_FLUSH_JOB(mb_mgr) != NULL)
+                ;
+
+        printf("\n");
+        return 0;
+}
+
 int
 api_test(struct IMB_MGR *mb_mgr)
 {
@@ -1246,6 +1736,12 @@ api_test(struct IMB_MGR *mb_mgr)
         run++;
 
         errors += test_job_invalid_cipher_args(mb_mgr);
+        run++;
+
+        errors += test_job_invalid_misc_args(mb_mgr);
+        run++;
+
+        errors += test_reset_api(mb_mgr);
         run++;
 
         test_suite_update(&ctx, run - errors, errors);

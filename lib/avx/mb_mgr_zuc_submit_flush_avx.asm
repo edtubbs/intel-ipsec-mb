@@ -41,7 +41,7 @@
 %define SUBMIT_JOB_ZUC256_EIA3 submit_job_zuc256_eia3_avx
 %define FLUSH_JOB_ZUC256_EIA3 flush_job_zuc256_eia3_avx
 
-section .data
+mksection .rodata
 default rel
 
 align 16
@@ -81,6 +81,16 @@ dd      0xFFFFFFFF, 0x00000000, 0xFFFFFFFF, 0xFFFFFFFF
 dd      0x00000000, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
 dd      0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF
 
+select_bits_mask:
+dq      0x3f
+dq      0xfc0
+dq      0x3f000
+dq      0xfc0000
+dq      0x3f000000
+dq      0xfc0000000
+dq      0x3f000000000
+dq      0xfc0000000000
+
 extern zuc_eia3_4_buffer_job_avx
 extern zuc256_eia3_4_buffer_job_avx
 extern asm_ZucInitialization_4_avx
@@ -116,7 +126,7 @@ _null_len_save: resq    1
 _rsp_save:      resq    1
 endstruc
 
-section .text
+mksection .text
 
 %define APPEND(a,b) a %+ b
 %define APPEND3(a,b,c) a %+ b %+ c
@@ -165,6 +175,32 @@ section .text
 
 %endmacro
 
+;; Read 8x6 bits and store them as 8 partial bytes
+;; (using 6 least significant bits)
+%macro EXPAND_FROM_6_TO_8_BYTES 3
+%define %%IN_OUT        %1 ; [in/out] Input/output GP register
+%define %%INPUT_COPY    %2 ; [clobbered] Temporary GP register
+%define %%TMP           %3 ; [clobbered] Temporary GP register
+
+        mov     %%INPUT_COPY, %%IN_OUT
+        mov     %%TMP, %%INPUT_COPY
+        ; Read bits [5:0] from input
+        and     %%TMP, [rel select_bits_mask]
+        ; Store bits [7:0] in output
+        mov     %%IN_OUT, %%TMP
+
+%assign %%i 1
+%rep 7
+        mov     %%TMP, %%INPUT_COPY
+        ; Read bits [6*i + 5 : 6*i] from input
+        and     %%TMP, [rel select_bits_mask + 8*%%i]
+        ; Store bits [8*i + 7 : 8*i] in output
+        shl     %%TMP, (2*%%i)
+        or      %%IN_OUT, %%TMP
+%assign %%i (%%i + 1)
+%endrep
+%endmacro
+
 %macro SUBMIT_JOB_ZUC_EEA3 1
 %define %%KEY_SIZE      %1 ; [constant] Key size (128 or 256)
 
@@ -201,7 +237,43 @@ section .text
         movzx   lane, BYTE(unused_lanes)
         shr     unused_lanes, 8
         mov     tmp, [job + _iv]
-        mov     [state + _zuc_args_IV + lane*8], tmp
+        shl     lane, 5
+%if %%KEY_SIZE == 128
+        ; Read first 16 bytes of IV
+        vmovdqu xmm0, [tmp]
+        vmovdqa [state + _zuc_args_IV + lane], xmm0
+%else ;; %%KEY_SIZE == 256
+        cmp     qword [job + _iv_len_in_bytes], 25
+        je      %%_iv_size_25
+%%_iv_size_23:
+        ; Read 23 bytes of IV and expand to 25 bytes
+        ; then expand the last 6 bytes to 8 bytes
+
+        ; Read and write first 16 bytes
+        vmovdqu xmm0, [tmp]
+        vmovdqa [state + _zuc_args_IV + lane], xmm0
+        ; Read and write next byte
+        mov     al, [tmp + 16]
+        mov     [state + _zuc_args_IV + lane + 16], al
+        ; Read next 6 bytes and write as 8 bytes
+        movzx   DWORD(tmp2), word [tmp + 17]
+        mov     DWORD(tmp3), [tmp + 19]
+        shl     tmp2, 32
+        or      tmp2, tmp3
+        EXPAND_FROM_6_TO_8_BYTES tmp2, tmp, tmp3
+        mov     [state + _zuc_args_IV + lane + 17], tmp2
+
+        jmp     %%_iv_read
+%%_iv_size_25:
+        ; Read 25 bytes of IV
+        vmovdqu xmm0, [tmp]
+        vmovdqa [state + _zuc_args_IV + lane], xmm0
+        vmovq   xmm0, [tmp + 16]
+        vpinsrb xmm0, [tmp + 24], 8
+        vmovdqa [state + _zuc_args_IV + lane + 16], xmm0
+%%_iv_read:
+%endif
+        shr     lane, 5
         mov     [state + _zuc_unused_lanes], unused_lanes
 
         mov     [state + _zuc_job_in_lane + lane*8], job
@@ -439,7 +511,6 @@ APPEND(%%skip_copy_ffs_,I):
         mov     tmp1, [state + _zuc_args_in + idx*8]
         mov     tmp2, [state + _zuc_args_out + idx*8]
         mov     tmp3, [state + _zuc_args_keys + idx*8]
-        mov     tmp4, [state + _zuc_args_IV + idx*8]
 
 %assign I 0
 %rep 4
@@ -448,7 +519,6 @@ APPEND(%%skip_copy_ffs_,I):
         mov     [state + _zuc_args_in + I*8], tmp1
         mov     [state + _zuc_args_out + I*8], tmp2
         mov     [state + _zuc_args_keys + I*8], tmp3
-        mov     [state + _zuc_args_IV + I*8], tmp4
 APPEND(%%skip_eea3_,I):
 %assign I (I+1)
 %endrep
@@ -486,7 +556,6 @@ APPEND(%%skip_eea3_,I):
 %else
         call    asm_Zuc256Initialization_4_avx
 %endif
-
 
 %ifndef LINUX
         add     rsp, 24
@@ -649,6 +718,8 @@ FLUSH_JOB_ZUC256_EEA3:
 %define len              rbp
 %define idx              rbp
 %define tmp              rbp
+%define tmp2             r14
+%define tmp3             r15
 
 %define lane             r8
 %define unused_lanes     rbx
@@ -676,7 +747,43 @@ FLUSH_JOB_ZUC256_EEA3:
         movzx   lane, BYTE(unused_lanes)
         shr     unused_lanes, 8
         mov     tmp, [job + _zuc_eia3_iv]
-        mov     [state + _zuc_args_IV + lane*8], tmp
+        shl     lane, 5
+%if %%KEY_SIZE == 128
+        ; Read first 16 bytes of IV
+        vmovdqu xmm0, [tmp]
+        vmovdqa [state + _zuc_args_IV + lane], xmm0
+%else ;; %%KEY_SIZE == 256
+        or      tmp, tmp
+        jnz     %%_iv_size_25
+%%_iv_size_23:
+        ; Read 23 bytes of IV and expand to 25 bytes
+        ; then expand the last 6 bytes to 8 bytes
+        mov     tmp, [job + _zuc_eia3_iv23]
+        ; Read and write first 16 bytes
+        vmovdqu xmm0, [tmp]
+        vmovdqa [state + _zuc_args_IV + lane], xmm0
+        ; Read and write next byte
+        mov     al, [tmp + 16]
+        mov     [state + _zuc_args_IV + lane + 16], al
+        ; Read next 6 bytes and write as 8 bytes
+        movzx   DWORD(tmp2), word [tmp + 17]
+        mov     DWORD(tmp3), [tmp + 19]
+        shl     tmp2, 32
+        or      tmp2, tmp3
+        EXPAND_FROM_6_TO_8_BYTES tmp2, tmp, tmp3
+        mov     [state + _zuc_args_IV + lane + 17], tmp2
+
+        jmp     %%_iv_read
+%%_iv_size_25:
+        ; Read 25 bytes of IV
+        vmovdqu xmm0, [tmp]
+        vmovdqa [state + _zuc_args_IV + lane], xmm0
+        vmovq   xmm0, [tmp + 16]
+        vpinsrb xmm0, [tmp + 24], 8
+        vmovdqa [state + _zuc_args_IV + lane + 16], xmm0
+%%_iv_read:
+%endif
+        shr     lane, 5
         mov     [state + _zuc_unused_lanes], unused_lanes
 
         mov     [state + _zuc_job_in_lane + lane*8], job
@@ -828,7 +935,6 @@ FLUSH_JOB_ZUC256_EEA3:
         mov     tmp1, [state + _zuc_args_in + idx*8]
         mov     tmp2, [state + _zuc_args_out + idx*8]
         mov     tmp3, [state + _zuc_args_keys + idx*8]
-        mov     tmp4, [state + _zuc_args_IV + idx*8]
         mov     WORD(tmp5), [state + _zuc_lens + idx*2]
 
         ; Set valid length in NULL jobs
@@ -857,7 +963,6 @@ FLUSH_JOB_ZUC256_EEA3:
         mov     [state + _zuc_args_in + I*8], tmp1
         mov     [state + _zuc_args_out + I*8], tmp2
         mov     [state + _zuc_args_keys + I*8], tmp3
-        mov     [state + _zuc_args_IV + I*8], tmp4
 APPEND(%%skip_eia3_,I):
 %assign I (I+1)
 %endrep
@@ -959,6 +1064,4 @@ MKGLOBAL(FLUSH_JOB_ZUC256_EIA3,function,internal)
 FLUSH_JOB_ZUC256_EIA3:
         FLUSH_JOB_ZUC_EIA3 256
 
-%ifdef LINUX
-section .note.GNU-stack noalloc noexec nowrite progbits
-%endif
+mksection stack-noexec

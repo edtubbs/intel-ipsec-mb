@@ -30,6 +30,7 @@
 %include "include/aesni_emu.inc"
 %include "include/clear_regs.asm"
 %include "include/cet.inc"
+%include "include/error.inc"
 ;;; Routines to generate subkeys for AES-CMAC.
 ;;; See RFC 4493 for more details.
 
@@ -72,8 +73,7 @@
 %define XKEY1   xmm1
 %define XKEY2   xmm2
 
-
-section .data
+mksection .rodata
 default rel
 
 align 16
@@ -101,7 +101,7 @@ byteswap_const:
         ;DDQ 0x000102030405060708090A0B0C0D0E0F
         dq 0x08090A0B0C0D0E0F, 0x0001020304050607
 
-section .text
+mksection .text
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;
@@ -142,12 +142,25 @@ section .text
 %define %%ARCH          %2
 
 %ifdef SAFE_PARAM
+        IMB_ERR_CHECK_RESET
+
         cmp     KEY_EXP, 0
-        jz      %%_aes_cmac_subkey_gen_sse_return
+        jz      %%_cmac_subkey_error
         cmp     KEY1, 0
-        jz      %%_aes_cmac_subkey_gen_sse_return
+        jz      %%_cmac_subkey_error
         cmp     KEY2, 0
-        jz      %%_aes_cmac_subkey_gen_sse_return
+        jz      %%_cmac_subkey_error
+        jmp     %%_cmac_subkey_no_error
+%%_cmac_subkey_error:
+        IMB_ERR_CHECK_START rax
+        IMB_ERR_CHECK_NULL KEY_EXP, rax, IMB_ERR_NULL_EXP_KEY
+        IMB_ERR_CHECK_NULL KEY1, rax, IMB_ERR_NULL_KEY
+        IMB_ERR_CHECK_NULL KEY2, rax, IMB_ERR_NULL_KEY
+        IMB_ERR_CHECK_END rax
+
+        jmp %%_aes_cmac_subkey_gen_sse_return
+
+%%_cmac_subkey_no_error:
 %endif
 
 %ifidn %%ARCH, no_aesni
@@ -226,19 +239,31 @@ section .text
 %endif
 %endmacro
 
-
 %macro AES_CMAC_SUBKEY_GEN_AVX 1
 %define %%NROUNDS       %1
 
 %ifdef SAFE_PARAM
-        cmp     KEY_EXP, 0
-        jz      %%_aes_cmac_subkey_gen_avx_return
-        cmp     KEY1, 0
-        jz      %%_aes_cmac_subkey_gen_avx_return
-        cmp     KEY2, 0
-        jz      %%_aes_cmac_subkey_gen_avx_return
-%endif
+        IMB_ERR_CHECK_RESET
 
+        cmp     KEY_EXP, 0
+        jz      %%_cmac_subkey_error_avx
+        cmp     KEY1, 0
+        jz      %%_cmac_subkey_error_avx
+        cmp     KEY2, 0
+        jz      %%_cmac_subkey_error_avx
+
+        jmp     %%_cmac_subkey_no_error_avx
+%%_cmac_subkey_error_avx:
+        IMB_ERR_CHECK_START rax
+        IMB_ERR_CHECK_NULL KEY_EXP, rax, IMB_ERR_NULL_EXP_KEY
+        IMB_ERR_CHECK_NULL KEY1, rax, IMB_ERR_NULL_KEY
+        IMB_ERR_CHECK_NULL KEY2, rax, IMB_ERR_NULL_KEY
+        IMB_ERR_CHECK_END rax
+
+        jmp     %%_aes_cmac_subkey_gen_avx_return
+
+%%_cmac_subkey_no_error_avx:
+%endif
         ;; Step 1.  L := AES-128(K, const_Zero) ;
         vmovdqa         XL, [KEY_EXP + 16*0]        ; 0. ARK xor const_Zero
         vaesenc         XL, [KEY_EXP + 16*1]        ; 1. ENC
@@ -397,6 +422,4 @@ aes_cmac_256_subkey_gen_avx512:
         AES_CMAC_SUBKEY_GEN_AVX 13
         ret
 
-%ifdef LINUX
-section .note.GNU-stack noalloc noexec nowrite progbits
-%endif
+mksection stack-noexec

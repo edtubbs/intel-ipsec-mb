@@ -1,4 +1,5 @@
 [![Coverity Status](https://scan.coverity.com/projects/16449/badge.svg)](https://scan.coverity.com/projects/intel-ipsec-mb)
+![Linux Build Status](https://github.com/intel/intel-ipsec-mb/actions/workflows/linux_make.yml/badge.svg)
 
 # Intel(R) Multi-Buffer Crypto for IPsec Library
 
@@ -77,7 +78,7 @@ Table 1. List of supported cipher algorithms and their implementations.
 | KASUMI-F8      | Y      | N      | N      | N      | N      | N      |
 | ZUC-EEA3       | N      | Y  x4  | Y  x4  | Y  x8  | Y  x16 | Y  x16 |
 | ZUC-EEA3-256   | N      | Y  x4  | Y  x4  | Y  x8  | Y  x16 | Y  x16 |
-| SNOW3G-UEA2    | N      | Y      | Y      | Y      | N      | N      |
+| SNOW3G-UEA2    | N      | Y      | Y      | Y      | Y  x16 | Y  x16 |
 | AES128-CBCS(9) | N      | Y(1)   | Y(3)   | N      | N      | Y(6)   |
 | Chacha20       | N      | Y      | Y      | Y      | Y      | N      |
 | Chacha20 AEAD  | N      | Y      | Y      | Y      | Y      | N      |
@@ -131,7 +132,7 @@ Table 2. List of supported integrity algorithms and their implementations.
 | KASUMI-F9         | Y      | N      | N      | N      | N      | N      |
 | ZUC-EIA3          | N      | Y  x4  | Y  x4  | Y  x8  | Y  x16 | Y  x16 |
 | ZUC-EIA3-256(6)   | N      | Y  x4  | Y  x4  | Y  x8  | Y  x16 | Y  x16 |
-| SNOW3G-UIA2       | N      | Y by4  | Y by4  | N      | N      | Y by16 |
+| SNOW3G-UIA2(9)    | N      | Y by4  | Y by4  | N      | Y by32 | Y by32 |
 | DOCSIS-CRC32(4)   | N      | Y      | Y      | N      | Y      | Y      |
 | HEC               | N      | Y      | Y      | N      | N      | N      |
 | POLY1305          | Y      | N      | N      | N      | Y      | Y      |
@@ -150,7 +151,6 @@ Notes:
 (5) - x8 on selected CPU's supporting GFNI  
 (6) - 4 byte tag size is supported only  
 (7) - Supported CRC types:
-
  - CRC32: Ethernet FCS, SCTP, WIMAX OFDMA  
  - CRC24: LTE A, LTE B  
  - CRC16: X25, FP data  
@@ -160,6 +160,7 @@ Notes:
  - CRC7: FP header  
  - CRC6: IUUP header  
 (8) - used only with PON-AES128-CTR cipher  
+(9) - x16 for init keystream generation, then by32
 
 Legend:  
 ` byY`- single buffer Y blocks at a time  
@@ -471,7 +472,6 @@ Algorithms where these constant time functions are used are the following:
 - DES: SSE, AVX and AVX2 implementations  
 - KASUMI: all architectures  
 - SNOW3G: all architectures  
-- ZUC: all architectures  
 
 If SAFE_LOOKUP is not enabled in the build (e.g. make SAFE_LOOKUP=n) then the
 algorithms listed above may be susceptible to timing attacks which could expose
@@ -486,6 +486,11 @@ To assist in clearing sensitive application data such as keys, plaintext etc.
 the library provides the `imb_clear_mem()` API. This API zeros _'size'_ bytes
 of memory pointed to by _'mem'_ followed by the _sfence_ instruction to
 ensure memory is cleared before the function returns.
+
+### Galois Counter Mode (GCM) TAG Size
+The library GCM and GMAC implementation provides flexibility as to tag size selection.
+As explained in [NIST Special Publication 800-38D](https://csrc.nist.gov/publications/detail/sp/800-38d/final) section 5.2.1.2 and Appendix C, using tag sizes shorter than 96 bits can be insecure.
+Please refer to the aforementioned sections to understand the details, trade offs and mitigations of using shorter tag sizes.
 
 7\. Installation
 ================

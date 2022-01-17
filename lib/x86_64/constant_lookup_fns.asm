@@ -29,7 +29,7 @@
 %include "include/reg_sizes.asm"
 %include "include/constant_lookup.asm"
 
-section .data
+mksection .rodata
 default rel
 
 align 16
@@ -109,7 +109,7 @@ times 8 dd 0xd0d0d0d0
 times 8 dd 0xe0e0e0e0
 times 8 dd 0xf0f0f0f0
 
-section .text
+mksection .text
 
 %ifdef LINUX
         %define arg1    rdi
@@ -445,7 +445,6 @@ loop32_sse:
 exit32_sse:
         ret
 
-
 ; uint32_t lookup_32bit_avx(const void *table, const uint32_t idx, const uint32_t size);
 ; arg 1 : pointer to table to look up
 ; arg 2 : index to look up
@@ -499,7 +498,6 @@ loop32_avx:
 exit32_avx:
         ret
 
-
 ; uint64_t lookup_64bit_sse(const void *table, const uint32_t idx, const uint32_t size);
 ; arg 1 : pointer to table to look up
 ; arg 2 : index to look up
@@ -552,7 +550,6 @@ loop64_sse:
 
 exit64_sse:
         ret
-
 
 ; uint64_t lookup_64bit_avx(const void *table, const uint32_t idx, const uint32_t size);
 ; arg 1 : pointer to table to look up
@@ -1133,9 +1130,8 @@ lookup_64x8bit_avx512:
 
         ; Read the indices into zmm0
         vmovdqu64       zmm0, [arg1]
-        LOOKUP8_64_AVX512 zmm0, zmm0, arg3, zmm1, zmm2, zmm3, zmm4, zmm5, zmm6, zmm7, \
-                          zmm16, zmm17, zmm18, zmm19, zmm20, zmm21, zmm22, zmm23, zmm24, \
-                          zmm25, zmm26, zmm27, zmm28, zmm29, zmm30, zmm31
+        LOOKUP8_64_AVX512 zmm0, zmm0, arg3, zmm1, zmm2, zmm3, zmm4, zmm5, zmm6, \
+                          k1, k2, k3, k4
 
         ; Write the values to arg2
         vmovdqu64       [arg2], zmm0
@@ -1162,13 +1158,11 @@ lookup_64x8bit_avx512_vbmi:
         ; Read the indices into zmm0
         vmovdqu64       zmm0, [arg1]
         LOOKUP8_64_AVX512_VBMI zmm0, zmm0, arg3, zmm1, zmm2, zmm3, \
-                               zmm4, zmm5, zmm16
+                               zmm4, zmm5, zmm16, zmm17, k1
 
         ; Write the values to arg2
         vmovdqu64       [arg2], zmm0
 
         ret
 
-%ifdef LINUX
-section .note.GNU-stack noalloc noexec nowrite progbits
-%endif
+mksection stack-noexec

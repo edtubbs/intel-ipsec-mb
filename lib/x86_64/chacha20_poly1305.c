@@ -36,6 +36,7 @@
 #include "include/clear_regs_mem.h"
 #include "include/memcpy.h"
 #include "include/chacha20_poly1305.h"
+#include "include/error.h"
 
 __forceinline
 void memcpy_asm(void *dst, const void *src, const size_t size,
@@ -561,6 +562,27 @@ void init_chacha20_poly1305_direct(const void *key,
                                    const uint64_t aad_len, const IMB_ARCH arch,
                                    const unsigned ifma)
 {
+#ifdef SAFE_PARAM
+        /* reset error status */
+        imb_set_errno(NULL, 0);
+
+        if (key == NULL) {
+                imb_set_errno(NULL, IMB_ERR_NULL_KEY);
+                return;
+        }
+        if (ctx == NULL) {
+                imb_set_errno(NULL, IMB_ERR_NULL_CTX);
+                return;
+        }
+        if (iv == NULL) {
+                imb_set_errno(NULL, IMB_ERR_NULL_IV);
+                return;
+        }
+        if (aad == NULL && aad_len != 0) {
+                imb_set_errno(NULL, IMB_ERR_NULL_AAD);
+                return;
+        }
+#endif
         ctx->hash[0] = 0;
         ctx->hash[1] = 0;
         ctx->hash[2] = 0;
@@ -633,6 +655,27 @@ void update_chacha20_poly1305_direct(const void *key,
                                      const IMB_ARCH arch,
                                      const unsigned ifma)
 {
+#ifdef SAFE_PARAM
+        /* reset error status */
+        imb_set_errno(NULL, 0);
+
+        if (key == NULL) {
+                imb_set_errno(NULL, IMB_ERR_NULL_KEY);
+                return;
+        }
+        if (ctx == NULL) {
+                imb_set_errno(NULL, IMB_ERR_NULL_CTX);
+                return;
+        }
+        if (src == NULL && len != 0) {
+                imb_set_errno(NULL, IMB_ERR_NULL_SRC);
+                return;
+        }
+        if (dst == NULL && len != 0) {
+                imb_set_errno(NULL, IMB_ERR_NULL_DST);
+                return;
+        }
+#endif
         uint64_t bytes_to_copy = 0;
         uint64_t remain_bytes_to_fill = (16 - ctx->remain_ct_bytes);
         uint64_t remain_ct_bytes;
@@ -814,6 +857,23 @@ finalize_chacha20_poly1305_direct(struct chacha20_poly1305_context_data *ctx,
                                   void *tag, const uint64_t tag_len,
                                   const IMB_ARCH arch, const unsigned ifma)
 {
+#ifdef SAFE_PARAM
+        /* reset error status */
+        imb_set_errno(NULL, 0);
+
+        if (ctx == NULL) {
+                imb_set_errno(NULL, IMB_ERR_NULL_CTX);
+                return;
+        }
+        if (tag == NULL) {
+                imb_set_errno(NULL, IMB_ERR_NULL_AUTH);
+                return;
+        }
+        if (tag_len == 0 || tag_len > 16) {
+                imb_set_errno(NULL, IMB_ERR_AUTH_TAG_LEN);
+                return;
+        }
+#endif
         uint64_t last[2];
         uint8_t auth_tag[16];
 

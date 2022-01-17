@@ -27,6 +27,7 @@
 
 TEST_APP := ipsec_MB_testapp
 XVALID_APP := ipsec_xvalid_test
+FUZZ_APP := job_api_fuzz_test
 INSTPATH ?= /usr/include/intel-ipsec-mb.h
 LIB_DIR ?= ../lib
 
@@ -34,7 +35,7 @@ USE_YASM ?= n
 YASM ?= yasm
 NASM ?= nasm
 
-MINGW ?= $(shell $(CC) -dM -E - < /dev/null | grep -i mingw | wc -l)
+MINGW ?= $(shell $(CC) -dM -E - < /dev/null | grep -i mingw | wc -l | sed 's/^ *//')
 
 CFLAGS = -MMD -D_GNU_SOURCE -DNO_COMPAT_IMB_API_053 \
 	-W -Wall -Wextra -Wmissing-declarations -Wpointer-arith \
@@ -84,6 +85,8 @@ CFLAGS +=  -I../lib/include -I../lib
 LDFLAGS += -L$(LIB_DIR)
 endif
 
+FUZZ_CFLAGS = -I../lib -L../lib $(CFLAGS) -g -fsanitize=fuzzer,address,leak
+
 DEBUG_OPT ?= -O0
 ifeq ($(DEBUG),y)
 CFLAGS += $(DEBUG_OPT) -DDEBUG -g
@@ -102,13 +105,20 @@ SOURCES := main.c gcm_test.c ctr_test.c customop_test.c des_test.c ccm_test.c \
 	hmac_md5_test.c aes_test.c sha_test.c chained_test.c api_test.c pon_test.c \
 	ecb_test.c zuc_test.c kasumi_test.c snow3g_test.c direct_api_test.c clear_mem_test.c \
 	hec_test.c xcbc_test.c aes_cbcs_test.c crc_test.c chacha_test.c poly1305_test.c \
-	chacha20_poly1305_test.c null_test.c snow_v_test.c
+	chacha20_poly1305_test.c null_test.c snow_v_test.c direct_api_param_test.c
 OBJECTS := $(SOURCES:%.c=%.o)
+
+ifneq ($(PIN_CEC_ROOT),)
+CFLAGS += -I$(PIN_CEC_ROOT)/include -DPIN_BASED_CEC
+endif
 
 # ipsec_xvalid_test modules
 XVALID_ASM := misc.asm
 XVALID_SOURCES := ipsec_xvalid.c utils.c
 XVALID_OBJECTS := $(XVALID_SOURCES:%.c=%.o) $(XVALID_ASM:%.asm=%.o)
+
+# fuzz modules
+FUZZ_SOURCES := job_api_fuzz_test.c
 
 # list of present dependency files
 DEP_FILES = $(wildcard ./*.d)
@@ -126,7 +136,7 @@ ifeq ($(CC_HAS_CET),1)
 endif
 
 # targets come here
-all: $(TEST_APP) $(XVALID_APP)
+all: $(TEST_APP) $(XVALID_APP) $(FUZZ_APP)
 
 $(TEST_APP): $(OBJECTS)
 	$(CC) $(LDFLAGS) $^ $(LDLIBS) -o $@
@@ -134,9 +144,17 @@ $(TEST_APP): $(OBJECTS)
 $(XVALID_APP): $(XVALID_OBJECTS)
 	$(CC) $(LDFLAGS) $^ $(LDLIBS) -o $@
 
+$(FUZZ_APP): $(FUZZ_SOURCES)
+ifneq (, $(shell which clang))
+	clang $(FUZZ_CFLAGS) $(FUZZ_SOURCES) $(LDLIBS) -o $@
+else
+	echo "Clang is not installed. $(FUZZ_APP) is not built"
+endif
+
+
 .PHONY: clean
 clean:
-	-rm -f $(OBJECTS) $(TEST_APP) $(DEP_FILES) $(XVALID_OBJECTS) $(XVALID_APP) $(ASM_OBJECTS)
+	-rm -f $(OBJECTS) $(TEST_APP) $(DEP_FILES) $(XVALID_OBJECTS) $(XVALID_APP) $(ASM_OBJECTS) $(FUZZ_APP)
 
 # style check section
 CHECKPATCH?=checkpatch.pl

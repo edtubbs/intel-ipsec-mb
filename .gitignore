@@ -1,4 +1,5 @@
 *.d
+*.pdb
 *.dll
 *.lib
 *.exp
@@ -12,4 +13,5 @@
 ipsec_MB_testapp*
 ipsec_perf*
 ipsec_xvalid_test*
+job_api_fuzz_test*
 TAGS

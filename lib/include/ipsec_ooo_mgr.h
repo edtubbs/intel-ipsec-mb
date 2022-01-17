@@ -82,7 +82,7 @@
 /**
  *****************************************************************************
  * @description
- *      Packed structure to store the ZUC state for 16 packets. *
+ *      Packed structure to store the ZUC state for 16 packets.
  *****************************************************************************/
 typedef struct zuc_state_16_s {
     uint32_t lfsrState[16][16];
@@ -154,11 +154,44 @@ typedef struct {
         DECLARE_ALIGNED(const uint8_t *in[16], 64);
         DECLARE_ALIGNED(uint8_t *out[16], 64);
         const uint8_t *keys[16];
-        const uint8_t *iv[16];
+        DECLARE_ALIGNED(uint8_t iv[16*32], 32);
         DECLARE_ALIGNED(uint32_t digest[16], 64);
         /* Memory for 128 bytes of KS for 16 buffers */
         DECLARE_ALIGNED(uint32_t ks[16 * 2 * 16], 64);
 } ZUC_ARGS_x16;
+
+/**
+ *****************************************************************************
+ * @description
+ *      Structure to store the Snow3G state for 16 packets.
+ *****************************************************************************/
+typedef struct {
+        void *in[16];
+        void *out[16];
+        void *keys[16];
+        void *iv[16];
+        uint32_t LFSR_0[16];
+        uint32_t LFSR_1[16];
+        uint32_t LFSR_2[16];
+        uint32_t LFSR_3[16];
+        uint32_t LFSR_4[16];
+        uint32_t LFSR_5[16];
+        uint32_t LFSR_6[16];
+        uint32_t LFSR_7[16];
+        uint32_t LFSR_8[16];
+        uint32_t LFSR_9[16];
+        uint32_t LFSR_10[16];
+        uint32_t LFSR_11[16];
+        uint32_t LFSR_12[16];
+        uint32_t LFSR_13[16];
+        uint32_t LFSR_14[16];
+        uint32_t LFSR_15[16];
+        uint32_t FSM_1[16];
+        uint32_t FSM_2[16];
+        uint32_t FSM_3[16];
+        uint64_t INITIALIZED[16];
+        uint64_t byte_length[16];
+} SNOW3G_ARGS;
 
 /* AES out-of-order scheduler fields */
 typedef struct {
@@ -218,7 +251,7 @@ typedef struct {
          * byte 4 is set to FF as a flag
          */
         uint64_t unused_lanes;
-        IMB_JOB *job_in_lane[16];
+        DECLARE_ALIGNED(IMB_JOB *job_in_lane[16], 16);
         uint64_t num_lanes_inuse;
         DECLARE_ALIGNED(uint8_t init_blocks[16 * (4 * 16)], 64);
         uint64_t road_block;
@@ -234,7 +267,7 @@ typedef struct {
          * byte 4 is set to FF as a flag
          */
         uint64_t unused_lanes;
-        IMB_JOB *job_in_lane[16];
+        DECLARE_ALIGNED(IMB_JOB *job_in_lane[16], 16);
         uint64_t num_lanes_inuse;
         DECLARE_ALIGNED(uint8_t scratch[16 * 16], 32);
         uint64_t road_block;
@@ -335,5 +368,31 @@ typedef struct {
         uint32_t num_lanes_inuse;
         uint64_t road_block;
 } MB_MGR_HMAC_MD5_OOO;
+
+/* SNOW3G out-of-order scheduler fields */
+typedef struct {
+        DECLARE_ALIGNED(SNOW3G_ARGS args, 64);
+        uint32_t lens[16];
+        IMB_JOB *job_in_lane[16];
+        uint32_t bits_fixup[16];
+        uint64_t init_mask;
+        uint64_t unused_lanes;
+        uint64_t num_lanes_inuse;
+        uint64_t init_done;
+        /* Auth only - reserve 32 bytes to store KS for 16 buffers */
+        DECLARE_ALIGNED(uint32_t ks[8 * 16], 32);
+        uint64_t road_block;
+} MB_MGR_SNOW3G_OOO;
+
+IMB_DLL_LOCAL void
+init_mb_mgr_sse_no_aesni_internal(IMB_MGR *state, const int reset_mgrs);
+IMB_DLL_LOCAL void
+init_mb_mgr_sse_internal(IMB_MGR *state, const int reset_mgrs);
+IMB_DLL_LOCAL void
+init_mb_mgr_avx_internal(IMB_MGR *state, const int reset_mgrs);
+IMB_DLL_LOCAL void
+init_mb_mgr_avx2_internal(IMB_MGR *state, const int reset_mgrs);
+IMB_DLL_LOCAL void
+init_mb_mgr_avx512_internal(IMB_MGR *state, const int reset_mgrs);
 
 #endif /* IMB_IPSEC_MB_INTERNAL_H */

@@ -117,6 +117,7 @@
 %include "include/gcm_keys_avx2_avx512.asm"
 %include "include/memcpy.asm"
 %include "include/cet.inc"
+%include "include/error.inc"
 %ifndef GCM128_MODE
 %ifndef GCM192_MODE
 %ifndef GCM256_MODE
@@ -144,7 +145,7 @@
 %define GMAC_FN_NAME(x) imb_aes_gmac_ %+ x %+ _256_ %+ avx_gen4
 %endif
 
-section .text
+mksection .text
 default rel
 
 ; need to push 4 registers into stack to maintain
@@ -195,7 +196,6 @@ default rel
         vpclmulqdq      %%GH, %%GH, %%HK, 0x10          ; %%GH = a0*b1
         vpxor           %%GH, %%GH, %%T3
 
-
         vpsrldq         %%T3, %%GH, 8                   ; shift-R %%GH 2 DWs
         vpslldq         %%GH, %%GH, 8                   ; shift-L %%GH 2 DWs
 
@@ -223,7 +223,6 @@ default rel
         vpxor           %%GH, %%GH, %%T1                 ; the result is in %%GH
 
 %endmacro
-
 
 ; In PRECOMPUTE, the commands filling Hashkey_i_k are not required for avx_gen4
 ; functions, but are kept to allow users to switch cpu architectures between calls
@@ -263,7 +262,6 @@ default rel
         vmovdqu  [%%GDATA + HashKey_8], %%T5
 %endmacro
 
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; READ_SMALL_DATA_INPUT: Packs xmm register with data when data input is less than 16 bytes.
 ; Returns 0 if data has length 0.
@@ -283,7 +281,6 @@ default rel
         mov     %%END_READ_LOCATION, %%INPUT
         add     %%END_READ_LOCATION, %%LENGTH
         xor     %%TMP1, %%TMP1
-
 
         cmp     %%COUNTER, 8
         jl      %%_byte_loop_2
@@ -316,7 +313,6 @@ default rel
 
 %endmacro ; READ_SMALL_DATA_INPUT
 
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; CALC_AAD_HASH: Calculates the hash of the data which will not be encrypted.
 ; Input: The input data (A_IN), that data's length (A_LEN), and the hash key (HASH_KEY).
@@ -338,7 +334,6 @@ default rel
 %define %%T3            %13
 %define %%T4            %14
 %define %%T5            %15     ; temp reg 5
-
 
         mov     %%T1, %%A_IN            ; T1 = AAD
         mov     %%T2, %%A_LEN           ; T2 = aadLen
@@ -502,8 +497,6 @@ default rel
 
 %endmacro ; CALC_AAD_HASH
 
-
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; PARTIAL_BLOCK: Handles encryption/decryption and the tag partial blocks between update calls.
 ; Requires the input data be at least 1 byte long.
@@ -538,7 +531,6 @@ default rel
 
 %%_data_read:                           ;Finished reading in data
 
-
         vmovdqu xmm9, [%%GDATA_CTX + PBlockEncKey]  ;xmm9 = my_ctx_data.partial_block_enc_key
 
         lea     r12, [rel SHIFT_MASK]
@@ -565,7 +557,6 @@ default rel
         vpshufb xmm3, [rel SHUF_MASK]
         vpshufb xmm3, xmm2
         vpxor   %%AAD_HASH, xmm3
-
 
         cmp     r15,0
         jl      %%_partial_incomplete_1
@@ -622,7 +613,6 @@ default rel
         vpshufb xmm9, xmm2
 %endif
 
-
         ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
         ; output encrypted Bytes
         cmp     r15,0
@@ -653,7 +643,6 @@ default rel
 
 %%_partial_block_done:
 %endmacro ; PARTIAL_BLOCK
-
 
 %macro GHASH_SINGLE_MUL 9
 %define %%GDATA                 %1
@@ -755,7 +744,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
 %assign j (j+1)
 %endrep
 
-
 vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
 %assign i (9-%%num_initial_blocks)
 %rep %%num_initial_blocks
@@ -764,8 +752,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
 %endrep
 
 %endif ; %if(%%num_initial_blocks>0)
-
-
 
 %assign i (9-%%num_initial_blocks)
 %rep %%num_initial_blocks
@@ -781,7 +767,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
                 vpshufb  reg(i), [rel SHUF_MASK]
 %assign i (i+1)
 %endrep
-
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -1230,7 +1215,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
 
 %%_initial_blocks_done:
 
-
 %endmacro
 
 ;;; INITIAL_BLOCKS macro with support for a partial final block.
@@ -1296,7 +1280,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
 
 %assign j (j+1)
 %endrep
-
 
 vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
 %assign i (9-%%num_initial_blocks)
@@ -1404,7 +1387,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
         mov            r12, 1
 
         jmp      %%_small_initial_compute_hash
-
 
 %endif                          ; %if %%num_initial_blocks < 8
 
@@ -1587,8 +1569,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
 
 %endmacro                       ; INITIAL_BLOCKS_PARTIAL
 
-
-
 ; encrypt 8 blocks at a time
 ; ghash the 8 previously encrypted ciphertext blocks
 ; %%GDATA (KEY), %%CYPH_PLAIN_OUT, %%PLAIN_CYPH_IN are used as pointers only, not modified
@@ -1661,8 +1641,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
                 vmovdqa %%CTR, %%XMM8
 %endif
 
-
-
         ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
                 vmovdqu %%T1, [%%GDATA + 16*0]
@@ -1686,7 +1664,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
                 vaesenc %%XMM6, %%T1
                 vaesenc %%XMM7, %%T1
                 vaesenc %%XMM8, %%T1
-
 
                 vmovdqu %%T1, [%%GDATA + 16*2]
                 vaesenc %%XMM1, %%T1
@@ -1765,7 +1742,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
                 vaesenc %%XMM6, %%T1
                 vaesenc %%XMM7, %%T1
                 vaesenc %%XMM8, %%T1
-
 
         vmovdqu         %%T1, [rsp + TMP4]
         vmovdqu         %%T5, [%%GDATA + HashKey_5]
@@ -1868,7 +1844,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
         vmovdqu         %%T1, [rsp + TMP8]
         vmovdqu         %%T5, [%%GDATA + HashKey]
 
-
         vpclmulqdq      %%T3, %%T1, %%T5, 0x00
         vpxor           %%T7, %%T7, %%T3
 
@@ -1880,7 +1855,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
 
         vpclmulqdq      %%T3, %%T1, %%T5, 0x11
         vpxor           %%T1, %%T4, %%T3
-
 
                 vmovdqu %%T5, [%%GDATA + 16*10]
  %ifndef GCM128_MODE            ; GCM192 or GCM256
@@ -1988,16 +1962,12 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
 %assign j (j+1)
 %endrep
 
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
 
         vpslldq %%T3, %%T6, 8                                   ; shift-L %%T3 2 DWs
         vpsrldq %%T6, %%T6, 8                                   ; shift-R %%T2 2 DWs
         vpxor   %%T7, %%T7, %%T3
         vpxor   %%T1, %%T1, %%T6                                ; accumulate the results in %%T1:%%T7
-
-
 
         ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
         ;first phase of the reduction
@@ -2024,7 +1994,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
         %endif
     %endif
 
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
         ;second phase of the reduction
         vpclmulqdq      %%T2, %%T3, %%T7, 0x00
@@ -2046,12 +2015,9 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
                 vpshufb %%XMM7, [rel SHUF_MASK]             ; perform a 16Byte swap
         vpshufb %%XMM8, [rel SHUF_MASK]             ; perform a 16Byte swap
 
-
         vpxor   %%XMM1, %%T1
 
-
 %endmacro                       ; GHASH_8_ENCRYPT_8_PARALLEL
-
 
 ; GHASH the last 4 ciphertext blocks.
 %macro  GHASH_LAST_8 16
@@ -2214,9 +2180,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
         vpxor           %%XMM1, %%XMM1, %%T6
         vpxor           %%T2, %%XMM1, %%T7
 
-
-
-
         vpslldq %%T4, %%T2, 8
         vpsrldq %%T2, %%T2, 8
 
@@ -2233,7 +2196,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
         vpxor           %%T7, %%T7, %%T2                        ; first phase of the reduction complete
         ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-
         ;second phase of the reduction
         vpclmulqdq      %%T2, %%T3, %%T7, 0x00
         vpsrldq         %%T2, %%T2, 4                           ; shift-R %%T2 1 DW (Shift-R only 1-DW to obtain 2-DWs shift-R)
@@ -2245,7 +2207,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
         ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
         vpxor           %%T6, %%T6, %%T4                        ; the result is in %%T6
 %endmacro
-
 
 ; GHASH the last 4 ciphertext blocks.
 %macro  GHASH_LAST_7 15
@@ -2392,9 +2353,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
         vpxor           %%XMM1, %%XMM1, %%T6
         vpxor           %%T2, %%XMM1, %%T7
 
-
-
-
         vpslldq %%T4, %%T2, 8
         vpsrldq %%T2, %%T2, 8
 
@@ -2411,7 +2369,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
         vpxor           %%T7, %%T7, %%T2                        ; first phase of the reduction complete
         ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-
         ;second phase of the reduction
         vpclmulqdq      %%T2, %%T3, %%T7, 0x00
         vpsrldq         %%T2, %%T2, 4                           ; shift-R %%T2 1 DW (Shift-R only 1-DW to obtain 2-DWs shift-R)
@@ -2423,8 +2380,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
         ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
         vpxor           %%T6, %%T6, %%T4                        ; the result is in %%T6
 %endmacro
-
-
 
 ;;; Handle encryption of the final partial block
 ;;; IN:
@@ -2534,8 +2489,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
 %endif
 %endmacro                       ; ENCRYPT_FINAL_PARTIAL_BLOCK
 
-
-
 ; Encryption of a single block
 %macro  ENCRYPT_SINGLE_BLOCK 2
 %define %%GDATA %1
@@ -2549,7 +2502,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
 %endrep
                 vaesenclast      %%XMM0, [%%GDATA+16*i]
 %endmacro
-
 
 ;; Start of Stack Setup
 
@@ -2579,7 +2531,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
         vmovdqu [rsp + LOCAL_STORAGE + 9*16],xmm15
 %endif
 %endmacro
-
 
 %macro FUNC_RESTORE 0
 
@@ -2644,7 +2595,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
         vpshufb %%J0, [rel SHUF_MASK] ; perform a 16Byte swap
 %endmacro
 
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; GCM_INIT initializes a gcm_context_data struct to prepare for encoding/decoding.
 ; Input: gcm_key_data * (GDATA_KEY), gcm_context_data *(GDATA_CTX), IV, IV_LEN,
@@ -2661,7 +2611,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
 %define %%IV_LEN        %6 ; [in] IV length
 
 %define %%AAD_HASH      xmm14
-
 
         mov     r10, %%A_LEN
         cmp     r10, 0
@@ -2733,7 +2682,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
         je      %%_small_initial_num_blocks_is_2
 
         jmp     %%_small_initial_num_blocks_is_1
-
 
 %%_small_initial_num_blocks_is_8:
         INITIAL_BLOCKS_PARTIAL  %%GDATA_KEY, %%GDATA_CTX, %%CYPH_PLAIN_OUT, %%PLAIN_CYPH_IN, r13, %%DATA_OFFSET, 8, xmm12, xmm13, xmm14, xmm15, xmm11, xmm9, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7, xmm8, xmm10, xmm0, %%ENC_DEC, %%INSTANCE_TYPE
@@ -2944,7 +2892,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
 %%_initial_num_blocks_is_0:
         INITIAL_BLOCKS  %%GDATA_KEY, %%CYPH_PLAIN_OUT, %%PLAIN_CYPH_IN, r13, %%DATA_OFFSET, 0, xmm12, xmm13, xmm14, xmm15, xmm11, xmm9, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7, xmm8, xmm10, xmm0, %%ENC_DEC
 
-
 %%_initial_blocks_encrypted:
         ;; The entire message was encrypted processed in initial and now need to be hashed
         cmp     r13, 0
@@ -2958,7 +2905,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
         cmp     r13, 128
         jl      %%_encrypt_by_8_partial
 
-
 %%_encrypt_by_8_parallel:
         ;; in_order vs. out_order is an optimization to increment the counter without shuffling
         ;; it back into little endian. r15d keeps track of when we need to increent in order so
@@ -2967,12 +2913,9 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
         and     r15d, 255
         vpshufb xmm9, [rel SHUF_MASK]
 
-
 %%_encrypt_by_8_new:
         cmp     r15d, 255-8
         jg      %%_encrypt_by_8
-
-
 
         ;; xmm0  - T1
         ;; xmm10 - T2
@@ -3011,7 +2954,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
         jge     %%_encrypt_by_8_new
         vpshufb  xmm9, [rel SHUF_MASK]
 
-
 %%_encrypt_by_8_parallel_done:
         ;; Test to see if we need a by 8 with partial block. At this point
         ;; bytes remaining should be either zero or between 113-127.
@@ -3023,10 +2965,8 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
         ;; is a little faster because it avoids extra shuffles.
         ;; TBD: Might need to account for when we don't have room to increment the counter.
 
-
         ;; Process parallel buffers with a final partial block.
         GHASH_8_ENCRYPT_8_PARALLEL  %%GDATA_KEY, %%CYPH_PLAIN_OUT, %%PLAIN_CYPH_IN, %%DATA_OFFSET, xmm0, xmm10, xmm11, xmm12, xmm13, xmm14, xmm9, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7, xmm8, xmm15, in_order, %%ENC_DEC, partial
-
 
         add     %%DATA_OFFSET, 128-16
         sub     r13, 128-16
@@ -3042,7 +2982,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
         ENCRYPT_FINAL_PARTIAL_BLOCK xmm8, xmm0, xmm10, %%CYPH_PLAIN_OUT, %%PLAIN_CYPH_IN, %%PLAIN_CYPH_LEN, %%ENC_DEC, %%DATA_OFFSET
 
         vpshufb  xmm8, [rel SHUF_MASK]
-
 
 %%_encrypt_done:
 
@@ -3071,9 +3010,7 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
 
 %%_enc_dec_done:
 
-
 %endmacro
-
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; GCM_COMPLETE Finishes Encryption/Decryption of last partial block after GCM_UPDATE finishes.
@@ -3131,7 +3068,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
 
         vpxor   xmm9, xmm9, xmm14
 
-
 %%_return_T:
         mov     r10, %%AUTH_TAG             ; r10 = authTag
         mov     r11, %%AUTH_TAG_LEN         ; r11 = auth_tag_len
@@ -3171,7 +3107,6 @@ vmovdqu  %%T_key, [%%GDATA_KEY+16*j]
 %endif
 %endmacro ; GCM_COMPLETE
 
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;void   aes_gcm_precomp_128_avx_gen4 /
 ;       aes_gcm_precomp_192_avx_gen4 /
@@ -3182,9 +3117,12 @@ MKGLOBAL(FN_NAME(precomp,_),function,)
 FN_NAME(precomp,_):
         endbranch64
 %ifdef SAFE_PARAM
+        ;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+
         ;; Check key_data != NULL
         cmp     arg1, 0
-        jz      exit_precomp
+        jz      error_precomp
 %endif
 
         push    r12
@@ -3193,8 +3131,6 @@ FN_NAME(precomp,_):
         push    r15
 
         mov     r14, rsp
-
-
 
         sub     rsp, VARIABLE_OFFSET
         and     rsp, ~63                                 ; align rsp to 64 bytes
@@ -3224,7 +3160,6 @@ FN_NAME(precomp,_):
         ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
         vmovdqu  [arg1 + HashKey], xmm6                 ; store HashKey<<1 mod poly
 
-
         PRECOMPUTE arg1, xmm6, xmm0, xmm1, xmm2, xmm3, xmm4, xmm5
 
 %ifidn __OUTPUT_FORMAT__, win64
@@ -3245,6 +3180,19 @@ exit_precomp:
 
         ret
 
+%ifdef SAFE_PARAM
+error_precomp:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
+
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+
+        jmp exit_precomp
+%endif
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;void   aes_gcm_init_128_avx_gen4 / aes_gcm_init_192_avx_gen4 / aes_gcm_init_256_avx_gen4
@@ -3269,17 +3217,20 @@ FN_NAME(init,_):
 %endif
 
 %ifdef SAFE_PARAM
+        ;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+
         ;; Check key_data != NULL
         cmp     arg1, 0
-        jz      exit_init
+        jz      error_init
 
         ;; Check context_data != NULL
         cmp     arg2, 0
-        jz      exit_init
+        jz      error_init
 
         ;; Check IV != NULL
         cmp     arg3, 0
-        jz      exit_init
+        jz      error_init
 
         ;; Check if aad_len == 0
         cmp     arg5, 0
@@ -3287,7 +3238,7 @@ FN_NAME(init,_):
 
         ;; Check aad != NULL (aad_len != 0)
         cmp     arg4, 0
-        jz      exit_init
+        jz      error_init
 
 skip_aad_check_init:
 %endif
@@ -3308,6 +3259,34 @@ exit_init:
         pop     r13
         pop     r12
         ret
+
+%ifdef SAFE_PARAM
+error_init:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
+
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Check context_data != NULL
+        IMB_ERR_CHECK_NULL arg2, rax, IMB_ERR_NULL_CTX
+
+        ;; Check IV != NULL
+        IMB_ERR_CHECK_NULL arg3, rax, IMB_ERR_NULL_IV
+
+        ;; Check if aad_len == 0
+        cmp     arg5, 0
+        jz      skip_aad_check_error_init
+
+        ;; Check aad != NULL (aad_len != 0)
+        IMB_ERR_CHECK_NULL arg4, rax, IMB_ERR_NULL_AAD
+
+skip_aad_check_error_init:
+
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+        jmp     exit_init
+%endif
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;void   aes_gcm_init_var_iv_128_avx_gen4 / aes_gcm_init_var_iv_192_avx_gen4 /
@@ -3334,21 +3313,24 @@ FN_NAME(init_var_iv,_):
 %endif
 
 %ifdef SAFE_PARAM
+        ;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+
         ;; Check key_data != NULL
         cmp     arg1, 0
-        jz      exit_init_IV
+        jz      error_init_IV
 
         ;; Check context_data != NULL
         cmp     arg2, 0
-        jz      exit_init_IV
+        jz      error_init_IV
 
         ;; Check IV != NULL
         cmp     arg3, 0
-        jz      exit_init_IV
+        jz      error_init_IV
 
         ;; Check iv_len != 0
         cmp     arg4, 0
-        jz      exit_init_IV
+        jz      error_init_IV
 
         ;; Check if aad_len == 0
         cmp     arg6, 0
@@ -3356,7 +3338,7 @@ FN_NAME(init_var_iv,_):
 
         ;; Check aad != NULL (aad_len != 0)
         cmp     arg5, 0
-        jz      exit_init_IV
+        jz      error_init_IV
 
 skip_aad_check_init_IV:
 %endif
@@ -3386,6 +3368,38 @@ exit_init_IV:
 	pop	r12
         ret
 
+%ifdef SAFE_PARAM
+error_init_IV:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
+
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Check context_data != NULL
+        IMB_ERR_CHECK_NULL arg2, rax, IMB_ERR_NULL_CTX
+
+        ;; Check IV != NULL
+        IMB_ERR_CHECK_NULL arg3, rax, IMB_ERR_NULL_IV
+
+        ;; Check iv_len != 0
+        IMB_ERR_CHECK_ZERO arg4, rax, IMB_ERR_IV_LEN
+
+        ;; Check if aad_len == 0
+        cmp     arg6, 0
+        jz      skip_aad_check_error_init_IV
+
+        ;; Check aad != NULL (aad_len != 0)
+        IMB_ERR_CHECK_NULL arg5, rax, IMB_ERR_NULL_AAD
+
+skip_aad_check_error_init_IV:
+
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+        jmp     exit_init_IV
+%endif
+
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;void   aes_gcm_enc_128_update_avx_gen4 / aes_gcm_enc_192_update_avx_gen4 /
 ;       aes_gcm_enc_128_update_avx_gen4
@@ -3393,7 +3407,7 @@ exit_init_IV:
 ;        struct gcm_context_data *context_data,
 ;        u8       *out,
 ;        const u8 *in,
-;        u64      plaintext_len);
+;        u64      msg_len);
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 MKGLOBAL(FN_NAME(enc,_update_),function,)
 FN_NAME(enc,_update_):
@@ -3401,25 +3415,35 @@ FN_NAME(enc,_update_):
         FUNC_SAVE
 
 %ifdef SAFE_PARAM
+	;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+
+	;; Load max len to reg on windows
+        INIT_GCM_MAX_LENGTH
+
         ;; Check key_data != NULL
         cmp     arg1, 0
-        jz      exit_update_enc
+        jz      error_update_enc
 
         ;; Check context_data != NULL
         cmp     arg2, 0
-        jz      exit_update_enc
+        jz      error_update_enc
 
         ;; Check if plaintext_len == 0
         cmp     arg5, 0
-        jz      exit_update_enc
+        jz      error_update_enc
+
+        ;; Check if msg_len > max_len
+        cmp     arg5, GCM_MAX_LENGTH
+        ja      error_update_enc
 
         ;; Check out != NULL (plaintext_len != 0)
         cmp     arg3, 0
-        jz      exit_update_enc
+        jz      error_update_enc
 
         ;; Check in != NULL (plaintext_len != 0)
         cmp     arg4, 0
-        jz      exit_update_enc
+        jz      error_update_enc
 %endif
         GCM_ENC_DEC arg1, arg2, arg3, arg4, arg5, ENC, multi_call
 
@@ -3428,6 +3452,35 @@ exit_update_enc:
 
         ret
 
+%ifdef SAFE_PARAM
+error_update_enc:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
+
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Check context_data != NULL
+        IMB_ERR_CHECK_NULL arg2, rax, IMB_ERR_NULL_CTX
+
+        ;; Check if plaintext_len == 0
+        cmp     arg5, 0
+        jz      skip_in_out_check_error_update_enc
+
+        ;; Check if msg_len > max_len
+        IMB_ERR_CHECK_ABOVE arg5, GCM_MAX_LENGTH, rax, IMB_ERR_CIPH_LEN
+
+        ;; Check out != NULL
+        IMB_ERR_CHECK_NULL arg3, rax, IMB_ERR_NULL_DST
+
+        ;; Check in != NULL (plaintext_len != 0)
+        IMB_ERR_CHECK_NULL arg4, rax, IMB_ERR_NULL_SRC
+
+skip_in_out_check_error_update_enc:
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+        jmp     exit_update_enc
+%endif
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;void   aes_gcm_dec_128_update_avx_gen4 / aes_gcm_dec_192_update_avx_gen4 /
@@ -3436,7 +3489,7 @@ exit_update_enc:
 ;        struct gcm_context_data *context_data,
 ;        u8       *out,
 ;        const u8 *in,
-;        u64      plaintext_len);
+;        u64      msg_len);
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 MKGLOBAL(FN_NAME(dec,_update_),function,)
 FN_NAME(dec,_update_):
@@ -3444,25 +3497,35 @@ FN_NAME(dec,_update_):
         FUNC_SAVE
 
 %ifdef SAFE_PARAM
+        ;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+
+        ;; Load max len to reg on windows
+        INIT_GCM_MAX_LENGTH
+
         ;; Check key_data != NULL
         cmp     arg1, 0
-        jz      exit_update_dec
+        jz      error_update_dec
 
         ;; Check context_data != NULL
         cmp     arg2, 0
-        jz      exit_update_dec
+        jz      error_update_dec
 
         ;; Check if plaintext_len == 0
         cmp     arg5, 0
-        jz      exit_update_dec
+        jz      error_update_dec
+
+        ;; Check if msg_len > max_len
+        cmp     arg5, GCM_MAX_LENGTH
+        ja      error_update_dec
 
         ;; Check out != NULL (plaintext_len != 0)
         cmp     arg3, 0
-        jz      exit_update_dec
+        jz      error_update_dec
 
         ;; Check in != NULL (plaintext_len != 0)
         cmp     arg4, 0
-        jz      exit_update_dec
+        jz      error_update_dec
 %endif
 
         GCM_ENC_DEC arg1, arg2, arg3, arg4, arg5, DEC, multi_call
@@ -3472,6 +3535,35 @@ exit_update_dec:
 
         ret
 
+%ifdef SAFE_PARAM
+error_update_dec:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
+
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Check context_data != NULL
+        IMB_ERR_CHECK_NULL arg2, rax, IMB_ERR_NULL_CTX
+
+        ;; Check if plaintext_len == 0
+        cmp     arg5, 0
+        jz      skip_in_out_check_error_update_dec
+
+        ;; Check if msg_len > max_len
+        IMB_ERR_CHECK_ABOVE arg5, GCM_MAX_LENGTH, rax, IMB_ERR_CIPH_LEN
+
+        ;; Check out != NULL
+        IMB_ERR_CHECK_NULL arg3, rax, IMB_ERR_NULL_DST
+
+        ;; Check in != NULL (plaintext_len != 0)
+        IMB_ERR_CHECK_NULL arg4, rax, IMB_ERR_NULL_SRC
+
+skip_in_out_check_error_update_dec:
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+        jmp     exit_update_dec
+%endif
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;void   aes_gcm_enc_128_finalize_avx_gen4 / aes_gcm_enc_192_finalize_avx_gen4 /
@@ -3485,24 +3577,27 @@ MKGLOBAL(FN_NAME(enc,_finalize_),function,)
 FN_NAME(enc,_finalize_):
         endbranch64
 %ifdef SAFE_PARAM
+        ;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+
         ;; Check key_data != NULL
         cmp     arg1, 0
-        jz      exit_enc_fin
+        jz      error_enc_fin
 
         ;; Check context_data != NULL
         cmp     arg2, 0
-        jz      exit_enc_fin
+        jz      error_enc_fin
 
         ;; Check auth_tag != NULL
         cmp     arg3, 0
-        jz      exit_enc_fin
+        jz      error_enc_fin
 
         ;; Check auth_tag_len == 0 or > 16
         cmp     arg4, 0
-        jz      exit_enc_fin
+        jz      error_enc_fin
 
         cmp     arg4, 16
-        ja      exit_enc_fin
+        ja      error_enc_fin
 %endif
         push r12
 
@@ -3535,9 +3630,31 @@ FN_NAME(enc,_finalize_):
 %endif
         pop r12
 exit_enc_fin:
+        ret
 
-ret
+%ifdef SAFE_PARAM
+error_enc_fin:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
 
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Check context_data != NULL
+        IMB_ERR_CHECK_NULL arg2, rax, IMB_ERR_NULL_CTX
+
+        ;; Check auth_tag != NULL
+        IMB_ERR_CHECK_NULL arg3, rax, IMB_ERR_NULL_AUTH
+
+        ;; Check auth_tag_len == 0 or > 16
+        IMB_ERR_CHECK_ZERO arg4, rax, IMB_ERR_AUTH_TAG_LEN
+
+        IMB_ERR_CHECK_ABOVE arg4, 16, rax, IMB_ERR_AUTH_TAG_LEN
+
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+        jmp     exit_enc_fin
+%endif
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;void   aes_gcm_dec_128_finalize_avx_gen4 / aes_gcm_dec_192_finalize_avx_gen4
@@ -3551,24 +3668,27 @@ MKGLOBAL(FN_NAME(dec,_finalize_),function,)
 FN_NAME(dec,_finalize_):
         endbranch64
 %ifdef SAFE_PARAM
+        ;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+
         ;; Check key_data != NULL
         cmp     arg1, 0
-        jz      exit_dec_fin
+        jz      error_dec_fin
 
         ;; Check context_data != NULL
         cmp     arg2, 0
-        jz      exit_dec_fin
+        jz      error_dec_fin
 
         ;; Check auth_tag != NULL
         cmp     arg3, 0
-        jz      exit_dec_fin
+        jz      error_dec_fin
 
         ;; Check auth_tag_len == 0 or > 16
         cmp     arg4, 0
-        jz      exit_dec_fin
+        jz      error_dec_fin
 
         cmp     arg4, 16
-        ja      exit_dec_fin
+        ja      error_dec_fin
 %endif
 
         push r12
@@ -3606,6 +3726,29 @@ FN_NAME(dec,_finalize_):
 exit_dec_fin:
         ret
 
+%ifdef SAFE_PARAM
+error_dec_fin:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
+
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Check context_data != NULL
+        IMB_ERR_CHECK_NULL arg2, rax, IMB_ERR_NULL_CTX
+
+        ;; Check auth_tag != NULL
+        IMB_ERR_CHECK_NULL arg3, rax, IMB_ERR_NULL_AUTH
+
+        ;; Check auth_tag_len == 0 or > 16
+        IMB_ERR_CHECK_ZERO arg4, rax, IMB_ERR_AUTH_TAG_LEN
+
+        IMB_ERR_CHECK_ABOVE arg4, 16, rax, IMB_ERR_AUTH_TAG_LEN
+
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+        jmp     exit_dec_fin
+%endif
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;void   aes_gcm_enc_128_avx_gen4 / aes_gcm_enc_192_avx_gen4 / aes_gcm_enc_256_avx_gen4
@@ -3613,7 +3756,7 @@ exit_dec_fin:
 ;        struct gcm_context_data *context_data,
 ;        u8       *out,
 ;        const u8 *in,
-;        u64      plaintext_len,
+;        u64      msg_len,
 ;        u8       *iv,
 ;        const u8 *aad,
 ;        u64      aad_len,
@@ -3626,40 +3769,50 @@ FN_NAME(enc,_):
         FUNC_SAVE
 
 %ifdef SAFE_PARAM
+        ;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+
+        ;; Load max len to reg on windows
+        INIT_GCM_MAX_LENGTH
+
         ;; Check key_data != NULL
         cmp     arg1, 0
-        jz      exit_enc
+        jz      error_enc
 
         ;; Check context_data != NULL
         cmp     arg2, 0
-        jz      exit_enc
+        jz      error_enc
 
         ;; Check IV != NULL
         cmp     arg6, 0
-        jz      exit_enc
+        jz      error_enc
 
         ;; Check auth_tag != NULL
         cmp     arg9, 0
-        jz      exit_enc
+        jz      error_enc
 
         ;; Check auth_tag_len == 0 or > 16
         cmp     arg10, 0
-        jz      exit_enc
+        jz      error_enc
 
         cmp     arg10, 16
-        ja      exit_enc
+        ja      error_enc
 
-        ;; Check if plaintext_len == 0
+        ;; Check if msg_len == 0
         cmp     arg5, 0
         jz      skip_in_out_check_enc
 
-        ;; Check out != NULL (plaintext_len != 0)
-        cmp     arg3, 0
-        jz      exit_enc
+        ;; Check if msg_len > max_len
+        cmp     arg5, GCM_MAX_LENGTH
+        ja      error_enc
 
-        ;; Check in != NULL (plaintext_len != 0)
+        ;; Check out != NULL (msg_len != 0)
+        cmp     arg3, 0
+        jz      error_enc
+
+        ;; Check in != NULL (msg_len != 0)
         cmp     arg4, 0
-        jz      exit_enc
+        jz      error_enc
 
 skip_in_out_check_enc:
         ;; Check if aad_len == 0
@@ -3668,7 +3821,7 @@ skip_in_out_check_enc:
 
         ;; Check aad != NULL (aad_len != 0)
         cmp     arg7, 0
-        jz      exit_enc
+        jz      error_enc
 
 skip_aad_check_enc:
 %endif
@@ -3683,13 +3836,62 @@ exit_enc:
 
         ret
 
+%ifdef SAFE_PARAM
+error_enc:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
+
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Check context_data != NULL
+        IMB_ERR_CHECK_NULL arg2, rax, IMB_ERR_NULL_CTX
+
+        ;; Check IV != NULL
+        IMB_ERR_CHECK_NULL arg6, rax, IMB_ERR_NULL_IV
+
+        ;; Check auth_tag != NULL
+        IMB_ERR_CHECK_NULL arg9, rax, IMB_ERR_NULL_AUTH
+
+        ;; Check auth_tag_len == 0 or > 16
+        IMB_ERR_CHECK_ZERO arg10, rax, IMB_ERR_AUTH_TAG_LEN
+
+        IMB_ERR_CHECK_ABOVE arg10, 16, rax, IMB_ERR_AUTH_TAG_LEN
+
+        ;; Check if msg_len == 0
+        cmp     arg5, 0
+        jz      skip_in_out_check_error_enc
+
+        ;; Check if msg_len > max_len
+        IMB_ERR_CHECK_ABOVE arg5, GCM_MAX_LENGTH, rax, IMB_ERR_CIPH_LEN
+
+        ;; Check out != NULL (msg_len != 0)
+        IMB_ERR_CHECK_NULL arg3, rax, IMB_ERR_NULL_DST
+
+        ;; Check in != NULL (msg_len != 0)
+        IMB_ERR_CHECK_NULL arg4, rax, IMB_ERR_NULL_SRC
+
+skip_in_out_check_error_enc:
+        ;; Check if aad_len == 0
+        cmp     arg8, 0
+        jz      skip_aad_check_error_enc
+
+        ;; Check aad != NULL (aad_len != 0)
+        IMB_ERR_CHECK_NULL arg7, rax, IMB_ERR_NULL_AAD
+
+skip_aad_check_error_enc:
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+        jmp     exit_enc
+%endif
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;void   aes_gcm_dec_128_avx_gen4 / aes_gcm_dec_192_avx_gen4 / aes_gcm_dec_256_avx_gen4
 ;       (const struct gcm_key_data *key_data,
 ;        struct gcm_context_data *context_data,
 ;        u8       *out,
 ;        const u8 *in,
-;        u64      plaintext_len,
+;        u64      msg_len,
 ;        u8       *iv,
 ;        const u8 *aad,
 ;        u64      aad_len,
@@ -3702,40 +3904,50 @@ FN_NAME(dec,_):
         FUNC_SAVE
 
 %ifdef SAFE_PARAM
+        ;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+
+        ;; Load max len to reg on windows
+        INIT_GCM_MAX_LENGTH
+
         ;; Check key_data != NULL
         cmp     arg1, 0
-        jz      exit_dec
+        jz      error_dec
 
         ;; Check context_data != NULL
         cmp     arg2, 0
-        jz      exit_dec
+        jz      error_dec
 
         ;; Check IV != NULL
         cmp     arg6, 0
-        jz      exit_dec
+        jz      error_dec
 
         ;; Check auth_tag != NULL
         cmp     arg9, 0
-        jz      exit_dec
+        jz      error_dec
 
         ;; Check auth_tag_len == 0 or > 16
         cmp     arg10, 0
-        jz      exit_dec
+        jz      error_dec
 
         cmp     arg10, 16
-        ja      exit_dec
+        ja      error_dec
 
-        ;; Check if plaintext_len == 0
+        ;; Check if msg_len == 0
         cmp     arg5, 0
         jz      skip_in_out_check_dec
 
-        ;; Check out != NULL (plaintext_len != 0)
-        cmp     arg3, 0
-        jz      exit_dec
+        ;; Check if msg_len > max_len
+        cmp     arg5, GCM_MAX_LENGTH
+        ja      error_dec
 
-        ;; Check in != NULL (plaintext_len != 0)
+        ;; Check out != NULL (msg_len != 0)
+        cmp     arg3, 0
+        jz      error_dec
+
+        ;; Check in != NULL (msg_len != 0)
         cmp     arg4, 0
-        jz      exit_dec
+        jz      error_dec
 
 skip_in_out_check_dec:
         ;; Check if aad_len == 0
@@ -3744,7 +3956,7 @@ skip_in_out_check_dec:
 
         ;; Check aad != NULL (aad_len != 0)
         cmp     arg7, 0
-        jz      exit_dec
+        jz      error_dec
 
 skip_aad_check_dec:
 %endif
@@ -3759,6 +3971,55 @@ exit_dec:
 
         ret
 
+%ifdef SAFE_PARAM
+error_dec:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
+
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Check context_data != NULL
+        IMB_ERR_CHECK_NULL arg2, rax, IMB_ERR_NULL_CTX
+
+        ;; Check IV != NULL
+        IMB_ERR_CHECK_NULL arg6, rax, IMB_ERR_NULL_IV
+
+        ;; Check auth_tag != NULL
+        IMB_ERR_CHECK_NULL arg9, rax, IMB_ERR_NULL_AUTH
+
+        ;; Check auth_tag_len == 0 or > 16
+        IMB_ERR_CHECK_ZERO arg10, rax, IMB_ERR_AUTH_TAG_LEN
+
+        IMB_ERR_CHECK_ABOVE arg10, 16, rax, IMB_ERR_AUTH_TAG_LEN
+
+        ;; Check if msg_len == 0
+        cmp     arg5, 0
+        jz      skip_in_out_check_error_dec
+
+        ;; Check if msg_len > max_len
+        IMB_ERR_CHECK_ABOVE arg5, GCM_MAX_LENGTH, rax, IMB_ERR_CIPH_LEN
+
+        ;; Check out != NULL (msg_len != 0)
+        IMB_ERR_CHECK_NULL arg3, rax, IMB_ERR_NULL_DST
+
+        ;; Check in != NULL (msg_len != 0)
+        IMB_ERR_CHECK_NULL arg4, rax, IMB_ERR_NULL_SRC
+
+skip_in_out_check_error_dec:
+        ;; Check if aad_len == 0
+        cmp     arg8, 0
+        jz      skip_aad_check_error_dec
+
+        ;; Check aad != NULL (aad_len != 0)
+        IMB_ERR_CHECK_NULL arg7, rax, IMB_ERR_NULL_AAD
+
+skip_aad_check_error_dec:
+
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+        jmp     exit_dec
+%endif
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;void   aes_gcm_enc_var_iv_128_avx_gen4 / aes_gcm_enc_var_iv_192_avx_gen4 /
@@ -3767,7 +4028,7 @@ exit_dec:
 ;        struct gcm_context_data *context_data,
 ;        u8        *out,
 ;        const u8  *in,
-;        u64       plaintext_len,
+;        u64       msg_len,
 ;        u8        *iv,
 ;        const u64 iv_len,
 ;        const u8  *aad,
@@ -3781,44 +4042,54 @@ FN_NAME(enc_var_iv,_):
 	FUNC_SAVE
 
 %ifdef SAFE_PARAM
+        ;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+
+        ;; Load max len to reg on windows
+        INIT_GCM_MAX_LENGTH
+
         ;; Check key_data != NULL
         cmp     arg1, 0
-        jz      exit_enc_IV
+        jz      error_enc_IV
 
         ;; Check context_data != NULL
         cmp     arg2, 0
-        jz      exit_enc_IV
+        jz      error_enc_IV
 
         ;; Check IV != NULL
         cmp     arg6, 0
-        jz      exit_enc_IV
+        jz      error_enc_IV
 
         ;; Check IV len != 0
         cmp     arg7, 0
-        jz      exit_enc_IV
+        jz      error_enc_IV
 
         ;; Check auth_tag != NULL
         cmp     arg10, 0
-        jz      exit_enc_IV
+        jz      error_enc_IV
 
         ;; Check auth_tag_len == 0 or > 16
         cmp     arg11, 0
-        jz      exit_enc_IV
+        jz      error_enc_IV
 
         cmp     arg11, 16
-        ja      exit_enc_IV
+        ja      error_enc_IV
 
-        ;; Check if plaintext_len == 0
+        ;; Check if msg_len == 0
         cmp     arg5, 0
         jz      skip_in_out_check_enc_IV
 
-        ;; Check out != NULL (plaintext_len != 0)
-        cmp     arg3, 0
-        jz      exit_enc_IV
+        ;; Check if msg_len > max_len
+        cmp     arg5, GCM_MAX_LENGTH
+        ja      error_enc_IV
 
-        ;; Check in != NULL (plaintext_len != 0)
+        ;; Check out != NULL (msg_len != 0)
+        cmp     arg3, 0
+        jz      error_enc_IV
+
+        ;; Check in != NULL (msg_len != 0)
         cmp     arg4, 0
-        jz      exit_enc_IV
+        jz      error_enc_IV
 
 skip_in_out_check_enc_IV:
         ;; Check if aad_len == 0
@@ -3827,7 +4098,7 @@ skip_in_out_check_enc_IV:
 
         ;; Check aad != NULL (aad_len != 0)
         cmp     arg8, 0
-        jz      exit_enc_IV
+        jz      error_enc_IV
 
 skip_aad_check_enc_IV:
 %endif
@@ -3850,6 +4121,58 @@ exit_enc_IV:
 
 	ret
 
+%ifdef SAFE_PARAM
+error_enc_IV:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
+
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Check context_data != NULL
+        IMB_ERR_CHECK_NULL arg2, rax, IMB_ERR_NULL_CTX
+
+        ;; Check IV != NULL
+        IMB_ERR_CHECK_NULL arg6, rax, IMB_ERR_NULL_IV
+
+        ;; Check IV len != 0
+        IMB_ERR_CHECK_ZERO arg7, rax, IMB_ERR_IV_LEN
+
+        ;; Check auth_tag != NULL
+        IMB_ERR_CHECK_NULL arg10, rax, IMB_ERR_NULL_AUTH
+
+        ;; Check auth_tag_len == 0 or > 16
+        IMB_ERR_CHECK_ZERO arg11, rax, IMB_ERR_AUTH_TAG_LEN
+
+        IMB_ERR_CHECK_ABOVE arg11, 16, rax, IMB_ERR_AUTH_TAG_LEN
+
+        ;; Check if msg_len == 0
+        cmp     arg5, 0
+        jz      skip_in_out_check_error_enc_IV
+
+        ;; Check if msg_len > max_len
+        IMB_ERR_CHECK_ABOVE arg5, GCM_MAX_LENGTH, rax, IMB_ERR_CIPH_LEN
+
+        ;; Check out != NULL (msg_len != 0)
+        IMB_ERR_CHECK_NULL arg3, rax, IMB_ERR_NULL_DST
+
+        ;; Check in != NULL (msg_len != 0)
+        IMB_ERR_CHECK_NULL arg4, rax, IMB_ERR_NULL_SRC
+
+skip_in_out_check_error_enc_IV:
+        ;; Check if aad_len == 0
+        cmp     arg9, 0
+        jz      skip_aad_check_error_enc_IV
+
+        ;; Check aad != NULL (aad_len != 0)
+        IMB_ERR_CHECK_NULL arg8, rax, IMB_ERR_NULL_AAD
+
+skip_aad_check_error_enc_IV:
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+        jmp     exit_enc_IV
+%endif
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;void   aes_gcm_dec_var_iv_128_avx_gen4 / aes_gcm_dec_var_iv_192_avx_gen4 /
 ;       aes_gcm_dec_var_iv_256_avx_gen4
@@ -3857,7 +4180,7 @@ exit_enc_IV:
 ;        struct gcm_context_data *context_data,
 ;        u8        *out,
 ;        const u8  *in,
-;        u64       plaintext_len,
+;        u64       msg_len,
 ;        u8        *iv,
 ;        const u64 iv_len,
 ;        const u8  *aad,
@@ -3871,44 +4194,54 @@ FN_NAME(dec_var_iv,_):
 	FUNC_SAVE
 
 %ifdef SAFE_PARAM
+        ;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+
+        ;; Load max len to reg on windows
+        INIT_GCM_MAX_LENGTH
+
         ;; Check key_data != NULL
         cmp     arg1, 0
-        jz      exit_dec_IV
+        jz      error_dec_IV
 
         ;; Check context_data != NULL
         cmp     arg2, 0
-        jz      exit_dec_IV
+        jz      error_dec_IV
 
         ;; Check IV != NULL
         cmp     arg6, 0
-        jz      exit_dec_IV
+        jz      error_dec_IV
 
         ;; Check IV len != 0
         cmp     arg7, 0
-        jz      exit_dec_IV
+        jz      error_dec_IV
 
         ;; Check auth_tag != NULL
         cmp     arg10, 0
-        jz      exit_dec_IV
+        jz      error_dec_IV
 
         ;; Check auth_tag_len == 0 or > 16
         cmp     arg11, 0
-        jz      exit_dec_IV
+        jz      error_dec_IV
 
         cmp     arg11, 16
-        ja      exit_dec_IV
+        ja      error_dec_IV
 
-        ;; Check if plaintext_len == 0
+        ;; Check if msg_len == 0
         cmp     arg5, 0
         jz      skip_in_out_check_dec_IV
 
-        ;; Check out != NULL (plaintext_len != 0)
-        cmp     arg3, 0
-        jz      exit_dec_IV
+        ;; Check if msg_len > max_len
+        cmp     arg5, GCM_MAX_LENGTH
+        ja      error_dec_IV
 
-        ;; Check in != NULL (plaintext_len != 0)
+        ;; Check out != NULL (msg_len != 0)
+        cmp     arg3, 0
+        jz      error_dec_IV
+
+        ;; Check in != NULL (msg_len != 0)
         cmp     arg4, 0
-        jz      exit_dec_IV
+        jz      error_dec_IV
 
 skip_in_out_check_dec_IV:
         ;; Check if aad_len == 0
@@ -3917,7 +4250,7 @@ skip_in_out_check_dec_IV:
 
         ;; Check aad != NULL (aad_len != 0)
         cmp     arg8, 0
-        jz      exit_dec_IV
+        jz      error_dec_IV
 
 skip_aad_check_dec_IV:
 %endif
@@ -3935,11 +4268,62 @@ skip_iv_len_12_dec_IV:
 
         GCM_COMPLETE arg1, arg2, arg10, arg11, single_call
 
-
 exit_dec_IV:
 	FUNC_RESTORE
 
 	ret
+
+%ifdef SAFE_PARAM
+error_dec_IV:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
+
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Check context_data != NULL
+        IMB_ERR_CHECK_NULL arg2, rax, IMB_ERR_NULL_CTX
+
+        ;; Check IV != NULL
+        IMB_ERR_CHECK_NULL arg6, rax, IMB_ERR_NULL_IV
+
+        ;; Check IV len != 0
+        IMB_ERR_CHECK_ZERO arg7, rax, IMB_ERR_IV_LEN
+
+        ;; Check auth_tag != NULL
+        IMB_ERR_CHECK_NULL arg10, rax, IMB_ERR_NULL_AUTH
+
+        ;; Check auth_tag_len == 0 or > 16
+        IMB_ERR_CHECK_ZERO arg11, rax, IMB_ERR_AUTH_TAG_LEN
+
+        IMB_ERR_CHECK_ABOVE arg11, 16, rax, IMB_ERR_AUTH_TAG_LEN
+
+        ;; Check if msg_len == 0
+        cmp     arg5, 0
+        jz      skip_in_out_check_error_dec_IV
+
+        ;; Check if msg_len > max_len
+        IMB_ERR_CHECK_ABOVE arg5, GCM_MAX_LENGTH, rax, IMB_ERR_CIPH_LEN
+
+        ;; Check out != NULL (msg_len != 0)
+        IMB_ERR_CHECK_NULL arg3, rax, IMB_ERR_NULL_DST
+
+        ;; Check in != NULL (msg_len != 0)
+        IMB_ERR_CHECK_NULL arg4, rax, IMB_ERR_NULL_SRC
+
+skip_in_out_check_error_dec_IV:
+        ;; Check if aad_len == 0
+        cmp     arg9, 0
+        jz      skip_aad_check_error_dec_IV
+
+        ;; Check aad != NULL (aad_len != 0)
+        IMB_ERR_CHECK_NULL arg8, rax, IMB_ERR_NULL_AAD
+
+skip_aad_check_error_dec_IV:
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+        jmp     exit_dec_IV
+%endif
 
 %ifdef GCM128_MODE
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -3956,25 +4340,28 @@ ghash_avx_gen4:
         FUNC_SAVE
 
 %ifdef SAFE_PARAM
+        ;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+
         ;; Check key_data != NULL
         cmp     arg1, 0
-        jz      exit_ghash
+        jz      error_ghash
 
         ;; Check in != NULL
         cmp     arg2, 0
-        jz      exit_ghash
+        jz      error_ghash
 
         ;; Check in_len != 0
         cmp     arg3, 0
-        jz      exit_ghash
+        jz      error_ghash
 
         ;; Check tag != NULL
         cmp     arg4, 0
-        jz      exit_ghash
+        jz      error_ghash
 
         ;; Check tag_len != 0
         cmp     arg5, 0
-        jz      exit_ghash
+        jz      error_ghash
 %endif
 
         ;; copy tag to xmm0
@@ -3990,9 +4377,35 @@ ghash_avx_gen4:
 
 exit_ghash:
         FUNC_RESTORE
-
         ret
+
+%ifdef SAFE_PARAM
+error_ghash:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
+
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Check in != NULL
+        IMB_ERR_CHECK_NULL arg2, rax, IMB_ERR_NULL_SRC
+
+        ;; Check in_len != 0
+        IMB_ERR_CHECK_ZERO arg3, rax, IMB_ERR_AUTH_LEN
+
+        ;; Check tag != NULL
+        IMB_ERR_CHECK_NULL arg4, rax, IMB_ERR_NULL_AUTH
+
+        ;; Check tag_len != 0
+        IMB_ERR_CHECK_ZERO arg5, rax, IMB_ERR_AUTH_TAG_LEN
+
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+
+        jmp     exit_ghash
 %endif
+
+%endif ;; GCM128_MODE
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; PARTIAL_BLOCK_GMAC: Handles the tag partial blocks between update calls.
@@ -4094,29 +4507,33 @@ exit_ghash:
 ;        const struct gcm_key_data *key_data,
 ;        struct gcm_context_data *context_data,
 ;        const   u8 *in,
-;        const   u64 plaintext_len);
+;        const   u64 msg_len);
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 MKGLOBAL(GMAC_FN_NAME(update),function,)
 GMAC_FN_NAME(update):
         endbranch64
 	FUNC_SAVE
 
-        ;; Check if plaintext_len == 0
+%ifdef SAFE_PARAM
+        ;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+%endif
+        ;; Check if msg_len == 0
         cmp     arg4, 0
         je	exit_gmac_update
 
 %ifdef SAFE_PARAM
         ;; Check key_data != NULL
         cmp     arg1, 0
-        jz      exit_gmac_update
+        jz      error_gmac_update
 
         ;; Check context_data != NULL
         cmp     arg2, 0
-        jz      exit_gmac_update
+        jz      error_gmac_update
 
-        ;; Check in != NULL (plaintext_len != 0)
+        ;; Check in != NULL (msg_len != 0)
         cmp     arg3, 0
-        jz      exit_gmac_update
+        jz      error_gmac_update
 %endif
 
         ; Increment size of "AAD length" for GMAC
@@ -4163,6 +4580,23 @@ exit_gmac_update:
 
 	ret
 
-%ifdef LINUX
-section .note.GNU-stack noalloc noexec nowrite progbits
+%ifdef SAFE_PARAM
+error_gmac_update:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
+
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Check context_data != NULL
+        IMB_ERR_CHECK_NULL arg2, rax, IMB_ERR_NULL_CTX
+
+        ;; Check in != NULL (msg_len != 0)
+        IMB_ERR_CHECK_NULL arg3, rax, IMB_ERR_NULL_SRC
+
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+        jmp     exit_gmac_update
 %endif
+
+mksection stack-noexec

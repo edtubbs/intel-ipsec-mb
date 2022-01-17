@@ -91,11 +91,21 @@ END_FIELDS
 START_FIELDS	; ZUC-EIA3 Specific Fields
 ;;;	name				size	align
 FIELD	__zuc_eia3_key,			8,	8	; pointer to key
-FIELD	__zuc_eia3_iv,			8,	8	; pointer to IV
+FIELD	__zuc_eia3_iv,			8,      8       ; pointer to IV (16-byte for ZUC-128 or 25-byte for ZUC-256)
+FIELD	__zuc_eia3_iv23,		8,	8	; pointer to 23-byte IV (only for ZUC-256)
 END_FIELDS
 
 %assign _ZUC_EIA3_spec_fields_size	_FIELD_OFFSET
 %assign _ZUC_EIA3_spec_fields_align	_STRUCT_ALIGN
+
+START_FIELDS	; SNOW3G-UIA2 Specific Fields
+;;;	name				size	align
+FIELD	__snow3g_uia2_key,		8,	8	; pointer to key
+FIELD	__snow3g_uia2_iv,		8,	8	; pointer to IV
+END_FIELDS
+
+%assign _SNOW3G_UIA2_spec_fields_size	_FIELD_OFFSET
+%assign _SNOW3G_UIA2_spec_fields_align	_STRUCT_ALIGN
 
 START_FIELDS	; POLY1305 Specific Fields
 ;;;	name				size	align
@@ -130,10 +140,9 @@ FIELD	_dec_keys,			8,	8	; pointer to dec keys
 FIELD	_key_len_in_bytes,		8,	8
 FIELD	_src,				8,	8	; pointer to src buffer
 FIELD	_dst,				8,	8	; pointer to dst buffer
-FIELD	_cipher_start_src_offset_in_bytes, \
-					8,	8
+FIELD	_cipher_start_src_offset,       8,	8
 FIELD	_msg_len_to_cipher,	        8,	8
-FIELD	_hash_start_src_offset_in_bytes,8,	8
+FIELD	_hash_start_src_offset,         8,	8
 FIELD	_msg_len_to_hash,	        8,	8
 FIELD	_iv,				8,	8	; pointer to IV
 FIELD	_iv_len_in_bytes,		8,	8
@@ -146,6 +155,7 @@ UNION	_u,	_HMAC_spec_fields_size,     _HMAC_spec_fields_align, \
                 _AES_CMAC_spec_fields_size, _AES_CMAC_spec_fields_align, \
                 _GCM_spec_fields_size, _GCM_spec_fields_align, \
                 _ZUC_EIA3_spec_fields_size, _ZUC_EIA3_spec_fields_align, \
+                _SNOW3G_UIA2_spec_fields_size, _SNOW3G_UIA2_spec_fields_align, \
                 _POLY1305_spec_fields_size, _POLY1305_spec_fields_align, \
                 _SNOW_V_AEAD_spec_fields_size, _SNOW_V_AEAD_spec_fields_align
 
@@ -167,13 +177,20 @@ UNION	_cipher_fields, _CBCS_spec_fields_size, _CBCS_spec_fields_align, \
                         ;; member when added in the future
 END_FIELDS
 
-%assign _msg_len_to_cipher_in_bytes _msg_len_to_cipher
-%assign _msg_len_to_cipher_in_bits  _msg_len_to_cipher
-%assign _msg_len_to_hash_in_bytes   _msg_len_to_hash
-%assign _msg_len_to_hash_in_bits    _msg_len_to_hash
-
 %assign _IMB_JOB_size	_FIELD_OFFSET
 %assign _IMB_JOB_align	_STRUCT_ALIGN
+
+%assign _msg_len_to_cipher_in_bytes _msg_len_to_cipher
+%assign _msg_len_to_cipher_in_bits  _msg_len_to_cipher
+
+%assign _msg_len_to_hash_in_bytes _msg_len_to_hash
+%assign _msg_len_to_hash_in_bits  _msg_len_to_hash
+
+%assign _cipher_start_src_offset_in_bytes _cipher_start_src_offset
+%assign _cipher_start_src_offset_in_bits  _cipher_start_src_offset
+%assign _cipher_start_offset_in_bits      _cipher_start_src_offset
+
+%assign _hash_start_src_offset_in_bytes _hash_start_src_offset
 
 %assign _auth_key_xor_ipad              _u + __auth_key_xor_ipad
 %assign _auth_key_xor_opad	        _u + __auth_key_xor_opad
@@ -189,9 +206,11 @@ END_FIELDS
 %assign _gcm_aad_len	                _u + __gcm_aad_len
 %assign _zuc_eia3_key                   _u + __zuc_eia3_key
 %assign _zuc_eia3_iv                    _u + __zuc_eia3_iv
+%assign _zuc_eia3_iv23                  _u + __zuc_eia3_iv23
+%assign _snow3g_uia2_key                _u + __snow3g_uia2_key
+%assign _snow3g_uia2_iv                 _u + __snow3g_uia2_iv
 %assign _poly1305_key	                _u + __poly1305_key
 %assign	_snow_v_aad			_u + __snow_v_aad
 %assign	_snow_v_aad_len 		_u + __snow_v_aad_len
 %assign	_snow_v_reserved		_u + __snow_v_reserved
 %assign	_cbcs_next_iv 		        _cipher_fields + __cbcs_next_iv
-

@@ -880,6 +880,7 @@ struct custom_job_params custom_job_params = {
 
 uint8_t archs[NUM_ARCHS] = {1, 1, 1, 1}; /* uses all function sets */
 int use_gcm_job_api = 0;
+int use_gcm_sgl_api = 0;
 int use_unhalted_cycles = 0; /* read unhalted cycles instead of tsc */
 uint64_t rd_cycles_cost = 0; /* cost of reading unhalted cycles */
 uint64_t core_mask = 0; /* bitmap of selected cores */
@@ -1912,6 +1913,61 @@ do_test(IMB_MGR *mb_mgr, struct params_s *params,
         return time / num_iter;
 }
 
+static void
+run_gcm_sgl(aes_gcm_init_t init, aes_gcm_enc_dec_update_t update,
+            aes_gcm_enc_dec_finalize_t finalize,
+            struct gcm_key_data *gdata_key,
+            struct gcm_context_data *gdata_ctx,
+            uint8_t *p_buffer, uint32_t buf_size,
+            const void *aad, const uint64_t aad_size,
+            const uint32_t num_iter)
+{
+        uint32_t i;
+        static uint32_t index = 0;
+        uint8_t auth_tag[12];
+        DECLARE_ALIGNED(uint8_t iv[16], 16);
+
+        for (i = 0; i < num_iter; i++) {
+                uint8_t *pb = get_dst_buffer(index, p_buffer);
+
+                if (imix_list_count != 0)
+                        buf_size = get_next_size(i);
+
+                init(gdata_key, gdata_ctx, iv, aad, aad_size);
+                update(gdata_key, gdata_ctx, pb, pb, buf_size);
+                finalize(gdata_key, gdata_ctx, auth_tag, sizeof(auth_tag));
+
+                index = get_next_index(index);
+        }
+}
+
+static void
+run_gcm(aes_gcm_enc_dec_t enc_dec,
+        struct gcm_key_data *gdata_key,
+        struct gcm_context_data *gdata_ctx,
+        uint8_t *p_buffer, uint32_t buf_size,
+        const void *aad, const uint64_t aad_size,
+        const uint32_t num_iter)
+{
+        uint32_t i;
+        uint32_t index = 0;
+        uint8_t auth_tag[12];
+        DECLARE_ALIGNED(uint8_t iv[16], 16);
+
+        for (i = 0; i < num_iter; i++) {
+                uint8_t *pb = get_dst_buffer(index, p_buffer);
+
+                if (imix_list_count != 0)
+                        buf_size = get_next_size(i);
+
+                enc_dec(gdata_key, gdata_ctx, pb, pb,
+                        buf_size, iv, aad, aad_size,
+                        auth_tag, sizeof(auth_tag));
+
+                index = get_next_index(index);
+        }
+}
+
 /* Performs test using GCM */
 static uint64_t
 do_test_gcm(struct params_s *params,
@@ -1921,12 +1977,7 @@ do_test_gcm(struct params_s *params,
         static DECLARE_ALIGNED(struct gcm_key_data gdata_key, 512);
         static DECLARE_ALIGNED(struct gcm_context_data gdata_ctx, 64);
         uint8_t *key;
-        static uint32_t index = 0;
-        uint32_t size_aes = params->size_aes;
-        uint32_t i;
         uint8_t *aad = NULL;
-        uint8_t auth_tag[12];
-        DECLARE_ALIGNED(uint8_t iv[16], 16);
         uint64_t time = 0;
         uint32_t aux;
 
@@ -1944,6 +1995,7 @@ do_test_gcm(struct params_s *params,
                 free_mem(&p_buffer, &p_keys);
                 exit(EXIT_FAILURE);
         }
+        memset(key, 0, params->aes_key_size);
 
         switch (params->aes_key_size) {
         case IMB_KEY_128_BYTES:
@@ -1967,50 +2019,50 @@ do_test_gcm(struct params_s *params,
                         time = __rdtscp(&aux);
 
                 if (params->aes_key_size == IMB_KEY_128_BYTES) {
-                        for (i = 0; i < num_iter; i++) {
-                                uint8_t *pb = get_dst_buffer(index, p_buffer);
-
-                                if (imix_list_count != 0)
-                                        size_aes = get_next_size(i);
-                                IMB_AES128_GCM_ENC(mb_mgr, &gdata_key,
-                                                   &gdata_ctx,
-                                                   pb,
-                                                   pb,
-                                                   size_aes, iv,
-                                                   aad, params->aad_size,
-                                                   auth_tag, sizeof(auth_tag));
-                                index = get_next_index(index);
-                        }
+                        if (use_gcm_sgl_api)
+                                run_gcm_sgl(mb_mgr->gcm128_init,
+                                            mb_mgr->gcm128_enc_update,
+                                            mb_mgr->gcm128_enc_finalize,
+                                            &gdata_key, &gdata_ctx,
+                                            p_buffer, params->size_aes,
+                                            aad, params->aad_size,
+                                            num_iter);
+                        else
+                                run_gcm(mb_mgr->gcm128_enc,
+                                        &gdata_key, &gdata_ctx,
+                                        p_buffer, params->size_aes,
+                                        aad, params->aad_size,
+                                        num_iter);
                 } else if (params->aes_key_size == IMB_KEY_192_BYTES) {
-                        for (i = 0; i < num_iter; i++) {
-                                uint8_t *pb = get_dst_buffer(index, p_buffer);
-
-                                if (imix_list_count != 0)
-                                        size_aes = get_next_size(i);
-                                IMB_AES192_GCM_ENC(mb_mgr, &gdata_key,
-                                                   &gdata_ctx,
-                                                   pb,
-                                                   pb,
-                                                   size_aes, iv,
-                                                   aad, params->aad_size,
-                                                   auth_tag, sizeof(auth_tag));
-                                index = get_next_index(index);
-                        }
+                        if (use_gcm_sgl_api)
+                                run_gcm_sgl(mb_mgr->gcm192_init,
+                                            mb_mgr->gcm192_enc_update,
+                                            mb_mgr->gcm192_enc_finalize,
+                                            &gdata_key, &gdata_ctx,
+                                            p_buffer, params->size_aes,
+                                            aad, params->aad_size,
+                                            num_iter);
+                        else
+                                run_gcm(mb_mgr->gcm192_enc,
+                                        &gdata_key, &gdata_ctx,
+                                        p_buffer, params->size_aes,
+                                        aad, params->aad_size,
+                                        num_iter);
                 } else { /* 256 */
-                        for (i = 0; i < num_iter; i++) {
-                                uint8_t *pb = get_dst_buffer(index, p_buffer);
-
-                                if (imix_list_count != 0)
-                                        size_aes = get_next_size(i);
-                                IMB_AES256_GCM_ENC(mb_mgr, &gdata_key,
-                                                   &gdata_ctx,
-                                                   pb,
-                                                   pb,
-                                                   size_aes, iv,
-                                                   aad, params->aad_size,
-                                                   auth_tag, sizeof(auth_tag));
-                                index = get_next_index(index);
-                        }
+                        if (use_gcm_sgl_api)
+                                run_gcm_sgl(mb_mgr->gcm256_init,
+                                            mb_mgr->gcm256_enc_update,
+                                            mb_mgr->gcm256_enc_finalize,
+                                            &gdata_key, &gdata_ctx,
+                                            p_buffer, params->size_aes,
+                                            aad, params->aad_size,
+                                            num_iter);
+                        else
+                                run_gcm(mb_mgr->gcm256_enc,
+                                        &gdata_key, &gdata_ctx,
+                                        p_buffer, params->size_aes,
+                                        aad, params->aad_size,
+                                        num_iter);
                 }
 #ifndef _WIN32
                 if (use_unhalted_cycles)
@@ -2028,50 +2080,50 @@ do_test_gcm(struct params_s *params,
                         time = __rdtscp(&aux);
 
                 if (params->aes_key_size == IMB_KEY_128_BYTES) {
-                        for (i = 0; i < num_iter; i++) {
-                                uint8_t *pb = get_dst_buffer(index, p_buffer);
-
-                                if (imix_list_count != 0)
-                                        size_aes = get_next_size(i);
-                                IMB_AES128_GCM_DEC(mb_mgr, &gdata_key,
-                                                   &gdata_ctx,
-                                                   pb,
-                                                   pb,
-                                                   size_aes, iv,
-                                                   aad, params->aad_size,
-                                                   auth_tag, sizeof(auth_tag));
-                                index = get_next_index(index);
-                        }
+                        if (use_gcm_sgl_api)
+                                run_gcm_sgl(mb_mgr->gcm128_init,
+                                            mb_mgr->gcm128_dec_update,
+                                            mb_mgr->gcm128_dec_finalize,
+                                            &gdata_key, &gdata_ctx,
+                                            p_buffer, params->size_aes,
+                                            aad, params->aad_size,
+                                            num_iter);
+                        else
+                                run_gcm(mb_mgr->gcm128_dec,
+                                        &gdata_key, &gdata_ctx,
+                                        p_buffer, params->size_aes,
+                                        aad, params->aad_size,
+                                        num_iter);
                 } else if (params->aes_key_size == IMB_KEY_192_BYTES) {
-                        for (i = 0; i < num_iter; i++) {
-                                uint8_t *pb = get_dst_buffer(index, p_buffer);
-
-                                if (imix_list_count != 0)
-                                        size_aes = get_next_size(i);
-                                IMB_AES192_GCM_DEC(mb_mgr, &gdata_key,
-                                                   &gdata_ctx,
-                                                   pb,
-                                                   pb,
-                                                   size_aes, iv,
-                                                   aad, params->aad_size,
-                                                   auth_tag, sizeof(auth_tag));
-                                index = get_next_index(index);
-                        }
+                        if (use_gcm_sgl_api)
+                                run_gcm_sgl(mb_mgr->gcm192_init,
+                                            mb_mgr->gcm192_dec_update,
+                                            mb_mgr->gcm192_dec_finalize,
+                                            &gdata_key, &gdata_ctx,
+                                            p_buffer, params->size_aes,
+                                            aad, params->aad_size,
+                                            num_iter);
+                        else
+                                run_gcm(mb_mgr->gcm192_dec,
+                                        &gdata_key, &gdata_ctx,
+                                        p_buffer, params->size_aes,
+                                        aad, params->aad_size,
+                                        num_iter);
                 } else { /* 256 */
-                        for (i = 0; i < num_iter; i++) {
-                                uint8_t *pb = get_dst_buffer(index, p_buffer);
-
-                                if (imix_list_count != 0)
-                                        size_aes = get_next_size(i);
-                                IMB_AES256_GCM_DEC(mb_mgr, &gdata_key,
-                                                   &gdata_ctx,
-                                                   pb,
-                                                   pb,
-                                                   size_aes, iv,
-                                                   aad, params->aad_size,
-                                                   auth_tag, sizeof(auth_tag));
-                                index = get_next_index(index);
-                        }
+                        if (use_gcm_sgl_api)
+                                run_gcm_sgl(mb_mgr->gcm256_init,
+                                            mb_mgr->gcm256_dec_update,
+                                            mb_mgr->gcm256_dec_finalize,
+                                            &gdata_key, &gdata_ctx,
+                                            p_buffer, params->size_aes,
+                                            aad, params->aad_size,
+                                            num_iter);
+                        else
+                                run_gcm(mb_mgr->gcm256_dec,
+                                        &gdata_key, &gdata_ctx,
+                                        p_buffer, params->size_aes,
+                                        aad, params->aad_size,
+                                        num_iter);
                 }
 #ifndef _WIN32
                 if (use_unhalted_cycles)
@@ -2507,6 +2559,8 @@ static void usage(void)
                 "--shani-off: don't use SHA extensions\n"
                 "--gcm-job-api: use JOB API for GCM perf tests"
                 " (raw GCM API is default)\n"
+                "--gcm-sgl-api: use direct SGL API for GCM perf tests"
+                " (raw GCM API is default)\n"
                 "--threads num: <num> for the number of threads to run"
                 " Max: %d\n"
                 "--cores mask: <mask> CPU's to run threads\n"
@@ -2533,8 +2587,9 @@ static void usage(void)
                 "--job-iter: number of tests iterations for each job size\n"
                 "--no-progress-bar: Don't display progress bar\n"
                 "--print-info: Display system and algorithm information\n"
-                "--turbo: Run extended RDTSC to core scaling measurement\n"
+                "--turbo: Run extended TSC to core scaling measurement\n"
                 "        (Use when turbo enabled)\n"
+                "--no-tsc-detect: don't check TSC to core scaling\n"
                 "--plot: Adjust text output for direct use with plot output\n",
                 MAX_NUM_THREADS + 1);
 }
@@ -2941,6 +2996,7 @@ int main(int argc, char *argv[])
         /* 1 size by default on job sizes list */
         uint32_t num_sizes_list = 1;
         int turbo_enabled = 0;
+        int tsc_detect = 1;
 
 #ifdef _WIN32
         HANDLE threads[MAX_NUM_THREADS];
@@ -2964,6 +3020,8 @@ int main(int argc, char *argv[])
                         flags |= IMB_FLAG_SHANI_OFF;
                 } else if (strcmp(argv[i], "--gcm-job-api") == 0) {
                         use_gcm_job_api = 1;
+                } else if (strcmp(argv[i], "--gcm-sgl-api") == 0) {
+                        use_gcm_sgl_api = 1;
                 } else if (strcmp(argv[i], "--quick") == 0) {
                         iter_scale = ITER_SCALE_SHORT;
                 } else if (strcmp(argv[i], "--smoke") == 0) {
@@ -3099,6 +3157,8 @@ int main(int argc, char *argv[])
                         return EXIT_SUCCESS;
                 } else if (strcmp(argv[i], "--turbo") == 0) {
                         turbo_enabled = 1;
+                } else if (strcmp(argv[i], "--no-tsc-detect") == 0) {
+                        tsc_detect = 0;
                 } else {
                         usage();
                         return EXIT_FAILURE;
@@ -3241,8 +3301,9 @@ int main(int argc, char *argv[])
                 }
         }
 
-        fprintf(stderr, "RDTSC scaling to core cycles: %.3f\n",
-                get_tsc_to_core_scale(turbo_enabled));
+        if (tsc_detect)
+                fprintf(stderr, "TSC scaling to core cycles: %.3f\n",
+                        get_tsc_to_core_scale(turbo_enabled));
 
         fprintf(stderr, "SHA size incr = %d\n", sha_size_incr);
 

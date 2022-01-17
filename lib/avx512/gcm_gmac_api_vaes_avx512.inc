@@ -28,11 +28,12 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 %include "avx512/gcm_vaes_avx512.inc"
+%include "include/error.inc"
 
 %ifndef GCM_GMAC_API_VAES_AVX512_INC
 %define GCM_GMAC_API_VAES_AVX512_INC
 
-section .text
+mksection .text
 default rel
 
 %ifdef GCM128_MODE
@@ -45,13 +46,16 @@ ghash_pre_vaes_avx512:
         endbranch64
 ;; Parameter is passed through register
 %ifdef SAFE_PARAM
+        ;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+
         ;; Check key != NULL
         cmp     arg1, 0
-        jz      exit_ghash_pre
+        jz      error_ghash_pre
 
         ;; Check key_data != NULL
         cmp     arg2, 0
-        jz      exit_ghash_pre
+        jz      error_ghash_pre
 %endif
 
         FUNC_SAVE
@@ -81,6 +85,22 @@ exit_ghash_pre:
 
         ret
 
+%ifdef SAFE_PARAM
+error_ghash_pre:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
+
+        ;; Check key != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_KEY
+
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg2, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+        jmp     exit_ghash_pre
+%endif
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;void   ghash_vaes_avx512
 ;        const struct gcm_key_data *key_data,
@@ -95,25 +115,28 @@ ghash_vaes_avx512:
         FUNC_SAVE
 
 %ifdef SAFE_PARAM
+        ;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+
         ;; Check key_data != NULL
         cmp     arg1, 0
-        jz      exit_ghash
+        jz      error_ghash
 
         ;; Check in != NULL
         cmp     arg2, 0
-        jz      exit_ghash
+        jz      error_ghash
 
         ;; Check in_len != 0
         cmp     arg3, 0
-        jz      exit_ghash
+        jz      error_ghash
 
         ;; Check tag != NULL
         cmp     arg4, 0
-        jz      exit_ghash
+        jz      error_ghash
 
         ;; Check tag_len != 0
         cmp     arg5, 0
-        jz      exit_ghash
+        jz      error_ghash
 %endif
 
         ;; copy tag to xmm0
@@ -130,9 +153,35 @@ ghash_vaes_avx512:
 
 exit_ghash:
         FUNC_RESTORE
-
         ret
+
+%ifdef SAFE_PARAM
+error_ghash:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
+
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Check in != NULL
+        IMB_ERR_CHECK_NULL arg2, rax, IMB_ERR_NULL_SRC
+
+        ;; Check in_len != 0
+        IMB_ERR_CHECK_ZERO arg3, rax, IMB_ERR_AUTH_LEN
+
+        ;; Check tag != NULL
+        IMB_ERR_CHECK_NULL arg4, rax, IMB_ERR_NULL_AUTH
+
+        ;; Check tag_len != 0
+        IMB_ERR_CHECK_ZERO arg5, rax, IMB_ERR_AUTH_TAG_LEN
+
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+
+        jmp     exit_ghash
 %endif
+
+%endif ;; GCM128_MODE
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;void   imb_aes_gmac_update_128_vaes_avx512 /
@@ -141,29 +190,33 @@ exit_ghash:
 ;        const struct gcm_key_data *key_data,
 ;        struct gcm_context_data *context_data,
 ;        const   u8 *in,
-;        const   u64 plaintext_len);
+;        const   u64 msg_len);
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 MKGLOBAL(GMAC_FN_NAME(update),function,)
 GMAC_FN_NAME(update):
         endbranch64
 	FUNC_SAVE
 
-        ;; Check if plaintext_len == 0
+%ifdef SAFE_PARAM
+        ;; Reset imb_errno
+        IMB_ERR_CHECK_RESET
+%endif
+        ;; Check if msg_len == 0
 	cmp	arg4, 0
 	je	exit_gmac_update
 
 %ifdef SAFE_PARAM
         ;; Check key_data != NULL
         cmp     arg1, 0
-        jz      exit_gmac_update
+        jz      error_gmac_update
 
         ;; Check context_data != NULL
         cmp     arg2, 0
-        jz      exit_gmac_update
+        jz      error_gmac_update
 
-        ;; Check in != NULL (plaintext_len != 0)
+        ;; Check in != NULL (msg_len != 0)
         cmp     arg3, 0
-        jz      exit_gmac_update
+        jz      error_gmac_update
 %endif
 
         ; Increment size of "AAD length" for GMAC
@@ -212,8 +265,25 @@ exit_gmac_update:
 
 	ret
 
-%ifdef LINUX
-section .note.GNU-stack noalloc noexec nowrite progbits
+%ifdef SAFE_PARAM
+error_gmac_update:
+        ;; Clear reg and imb_errno
+        IMB_ERR_CHECK_START rax
+
+        ;; Check key_data != NULL
+        IMB_ERR_CHECK_NULL arg1, rax, IMB_ERR_NULL_EXP_KEY
+
+        ;; Check context_data != NULL
+        IMB_ERR_CHECK_NULL arg2, rax, IMB_ERR_NULL_CTX
+
+        ;; Check in != NULL (msg_len != 0)
+        IMB_ERR_CHECK_NULL arg3, rax, IMB_ERR_NULL_SRC
+
+        ;; Set imb_errno
+        IMB_ERR_CHECK_END rax
+        jmp     exit_gmac_update
 %endif
+
+mksection stack-noexec
 
 %endif ; GCM_GMAC_API_VAES_AVX512_INC

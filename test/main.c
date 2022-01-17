@@ -35,7 +35,7 @@
 #include "customop_test.h"
 #include "utils.h"
 
-extern int des_test(const enum arch_type arch, struct IMB_MGR *mb_mgr);
+extern int des_test(struct IMB_MGR *mb_mgr);
 extern int ccm_test(struct IMB_MGR *mb_mgr);
 extern int cmac_test(struct IMB_MGR *mb_mgr);
 extern int hmac_sha1_test(struct IMB_MGR *mb_mgr);
@@ -61,15 +61,194 @@ extern int poly1305_test(struct IMB_MGR *mb_mgr);
 extern int chacha20_poly1305_test(struct IMB_MGR *mb_mgr);
 extern int null_test(struct IMB_MGR *mb_mgr);
 extern int snow_v_test(struct IMB_MGR *mb_mgr);
+extern int direct_api_param_test(struct IMB_MGR *mb_mgr);
 
+typedef int (*imb_test_t)(struct IMB_MGR *mb_mgr);
 
 #include "do_test.h"
+
+#ifdef _WIN32
+#define strcasecmp _stricmp
+#endif
+
+#define MAX_STR_LENGTH 32
+
+struct imb_test {
+        char str[MAX_STR_LENGTH];
+        imb_test_t fn;
+        unsigned enabled;
+};
+
+struct imb_test tests[] = {
+        {
+                .str = "KAT",
+                .fn = known_answer_test,
+                .enabled = 1
+        },
+        {
+                .str = "DO_TEST",
+                .fn = do_test,
+                .enabled = 1
+        },
+        {
+		.str = "CTR",
+                .fn = ctr_test,
+                .enabled = 1
+        },
+        {
+                .str = "PON",
+                .fn = pon_test,
+                .enabled = 1
+        },
+        {
+		.str = "XCBC",
+                .fn = xcbc_test,
+                .enabled = 1
+        },
+        {
+                .str = "GCM",
+                .fn = gcm_test,
+                .enabled = 1
+        },
+        {
+                .str = "CUSTOMOP",
+                .fn = customop_test,
+                .enabled = 1
+        },
+        {
+                .str = "DES",
+                .fn = des_test,
+                .enabled = 1
+        },
+        {
+                .str = "CCM",
+                .fn = ccm_test,
+                .enabled = 1
+        },
+        {
+                .str = "CMAC",
+                .fn = cmac_test,
+                .enabled = 1
+        },
+        {
+                .str = "ZUC",
+                .fn = zuc_test,
+                .enabled = 1
+        },
+        {
+                .str = "KASUMI",
+                .fn = kasumi_test,
+                .enabled = 1
+        },
+        {
+                .str = "SNOW3G",
+                .fn = snow3g_test,
+                .enabled = 1
+        },
+        {
+                .str = "HMAC_SHA1",
+                .fn = hmac_sha1_test,
+                .enabled = 1
+        },
+        {
+                .str = "HMAC_SHA256",
+                .fn = hmac_sha256_sha512_test,
+                .enabled = 1
+        },
+        {
+                .str = "HMAC_MD5",
+                .fn = hmac_md5_test,
+                .enabled = 1
+        },
+        {
+                .str = "AES",
+                .fn = aes_test,
+                .enabled = 1
+        },
+        {
+                .str = "ECB",
+                .fn = ecb_test,
+                .enabled = 1
+        },
+        {
+                .str = "SHA",
+                .fn = sha_test,
+                .enabled = 1
+        },
+        {
+		.str = "CHAINED",
+                .fn = chained_test,
+                .enabled = 1
+        },
+        {
+                .str = "HEC",
+                .fn = hec_test,
+                .enabled = 1
+        },
+        {
+                .str = "AES_CBCS",
+                .fn = aes_cbcs_test,
+                .enabled = 1
+        },
+        {
+                .str = "CHACHA",
+                .fn = chacha_test,
+                .enabled = 1
+        },
+        {
+                .str = "POLY1305",
+                .fn = poly1305_test,
+                .enabled = 1
+        },
+        {
+                .str = "API",
+                .fn = api_test,
+                .enabled = 1
+        },
+        {
+                .str = "DIRECT_API",
+                .fn = direct_api_test,
+                .enabled = 1
+        },
+        {
+                .str = "CLEAR_MEM",
+                .fn = clear_mem_test,
+                .enabled = 1
+        },
+        {
+                .str = "CRC",
+                .fn = crc_test,
+                .enabled = 1
+        },
+        {
+                .str = "CHACHA20_POLY1305",
+                .fn = chacha20_poly1305_test,
+                .enabled = 1
+        },
+        {
+                .str = "NULL",
+                .fn = null_test,
+                .enabled = 1
+        },
+        {
+                .str = "SNOW_V",
+                .fn = snow_v_test,
+                .enabled = 1
+        },
+        {
+                .str = "DIRECT_API_PARAM",
+                .fn = direct_api_param_test,
+                .enabled = 1
+        }
+};
 
 static void
 usage(const char *name)
 {
 	fprintf(stderr,
                 "Usage: %s [args], where args are zero or more\n"
+                "--test-type TEST_NAME : Run single test type\n"
+                "--stop-on-fail: Stop test execution if a test fails\n"
                 "--no-aesni-emu: Don't do AESNI emulation\n"
                 "--no-avx512: Don't do AVX512\n"
 		"--no-avx2: Don't do AVX2\n"
@@ -101,6 +280,7 @@ print_hw_features(void)
                 { IMB_FEATURE_VPCLMULQDQ, "VPCLMULQDQ" },
                 { IMB_FEATURE_GFNI, "GFNI" },
                 { IMB_FEATURE_AVX512_IFMA, "AVX512-IFMA" },
+                { IMB_FEATURE_BMI2, "BMI2" },
         };
         IMB_MGR *p_mgr = NULL;
         unsigned i;
@@ -123,6 +303,35 @@ print_hw_features(void)
         free_mb_mgr(p_mgr);
 }
 
+/*
+ * Check string argument is supported and if it is,
+ * return index associated with it.
+ */
+static unsigned
+check_test_string_arg(const char *param, const char *arg)
+{
+        unsigned test_idx;
+
+        if (arg == NULL) {
+                fprintf(stderr, "%s requires an argument\n", param);
+                goto exit;
+        }
+
+        for (test_idx = 0; test_idx < DIM(tests); test_idx++)
+                if (strcasecmp(arg, tests[test_idx].str) == 0)
+                        return test_idx;
+
+        /* Argument is not listed in the available options */
+        fprintf(stderr, "Invalid argument for %s\n", param);
+exit:
+        fprintf(stderr, "Accepted arguments: ");
+        for (test_idx = 0; test_idx < DIM(tests); test_idx++)
+                fprintf(stderr, "%s ", tests[test_idx].str);
+        fprintf(stderr, "\n");
+
+        return DIM(tests);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -130,6 +339,7 @@ main(int argc, char **argv)
         int i, atype, auto_detect = 0;
         uint64_t flags = 0;
         int errors = 0;
+        unsigned int stop_on_fail = 0;
 
         /* Check version number */
         if (imb_get_version() < IMB_VERSION(0, 50, 0))
@@ -154,22 +364,40 @@ main(int argc, char **argv)
 			continue;
 		else if (strcmp(argv[i], "--auto-detect") == 0)
                         (void) auto_detect; /* legacy option - to be removed */
-		else {
-			usage(argv[0]);
-			return EXIT_FAILURE;
-		}
-	}
+		else if (strcmp(argv[i], "--stop-on-fail") == 0)
+                        stop_on_fail = 1;
+                else if (strcmp(argv[i], "--test-type") == 0) {
+                        unsigned selected_test;
+
+                        selected_test = check_test_string_arg(argv[i],
+                                                              argv[i+1]);
+                        if (selected_test == DIM(tests))
+                                return EXIT_FAILURE;
+                        else {
+                                /* Disable all tests except the one passed */
+                                unsigned test_idx;
+
+                                for (test_idx = 0; test_idx < DIM(tests);
+                                     test_idx++)
+                                        if (test_idx != selected_test)
+                                                tests[test_idx].enabled = 0;
+                        }
+                        i++;
+                }
+        }
 
         /* Go through architectures */
         for (atype = IMB_ARCH_NOAESNI; atype < IMB_ARCH_NUM; atype++) {
                 IMB_MGR *p_mgr = NULL;
+                unsigned test_idx;
+                uint64_t used_flags = flags;
 
                 if (!arch_support[atype])
                         continue;
                 if (atype == IMB_ARCH_NOAESNI)
-                        p_mgr = alloc_mb_mgr(flags | IMB_FLAG_AESNI_OFF);
-                else
-                        p_mgr = alloc_mb_mgr(flags);
+                        used_flags |= IMB_FLAG_AESNI_OFF;
+
+                p_mgr = alloc_mb_mgr(used_flags);
 
                 if (p_mgr == NULL) {
                         printf("Error allocating MB_MGR structure!\n");
@@ -194,37 +422,19 @@ main(int argc, char **argv)
 
                 print_tested_arch(p_mgr->features, atype);
 
-                errors += known_answer_test(p_mgr);
-                errors += do_test(p_mgr);
-                errors += ctr_test(p_mgr);
-                errors += pon_test(p_mgr);
-                errors += xcbc_test(p_mgr);
-                errors += gcm_test(p_mgr);
-                errors += customop_test(p_mgr);
-                errors += des_test(atype, p_mgr);
-                errors += ccm_test(p_mgr);
-                errors += cmac_test(p_mgr);
-                errors += zuc_test(p_mgr);
-                errors += kasumi_test(p_mgr);
-                errors += snow3g_test(p_mgr);
-                errors += hmac_sha1_test(p_mgr);
-                errors += hmac_sha256_sha512_test(p_mgr);
-                errors += hmac_md5_test(p_mgr);
-                errors += aes_test(p_mgr);
-                errors += ecb_test(p_mgr);
-                errors += sha_test(p_mgr);
-                errors += chained_test(p_mgr);
-                errors += hec_test(p_mgr);
-                errors += aes_cbcs_test(p_mgr);
-                errors += chacha_test(p_mgr);
-                errors += poly1305_test(p_mgr);
-                errors += api_test(p_mgr);
-                errors += direct_api_test(p_mgr);
-                errors += clear_mem_test(p_mgr);
-                errors += crc_test(p_mgr);
-                errors += chacha20_poly1305_test(p_mgr);
-                errors += null_test(p_mgr);
-                errors += snow_v_test(p_mgr);
+                for (test_idx = 0; test_idx < DIM(tests); test_idx++) {
+                        if (tests[test_idx].enabled) {
+                                errors += tests[test_idx].fn(p_mgr);
+                                /*
+                                 * Stop the execution if a failure is
+                                 * encountered and stop_on_fail parameter is set
+                                 */
+                                if (errors && stop_on_fail) {
+                                        free_mb_mgr(p_mgr);
+                                        return EXIT_FAILURE;
+                                }
+                        }
+                }
 
                 free_mb_mgr(p_mgr);
         }

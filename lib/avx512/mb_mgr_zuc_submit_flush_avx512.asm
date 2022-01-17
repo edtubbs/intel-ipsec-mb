@@ -53,9 +53,10 @@
 %define ZUC_KEYGEN_16      asm_ZucGenKeystream_16_avx512
 %define ZUC_KEYGEN64B_16   asm_ZucGenKeystream64B_16_avx512
 %define ZUC_ROUND64B       asm_Eia3Round64BAVX512_16
+%define ZUC_EIA3_N64B      asm_Eia3_Nx64B_AVX512_16
 %endif
 
-section .data
+mksection .rodata
 default rel
 
 index_to_mask:
@@ -84,6 +85,8 @@ extern asm_ZucGenKeystream64B_16_avx512
 extern asm_ZucGenKeystream64B_16_gfni_avx512
 extern asm_Eia3Round64BAVX512_16
 extern asm_Eia3Round64B_16_VPCLMUL
+extern asm_Eia3_Nx64B_AVX512_16
+extern asm_Eia3_Nx64B_AVX512_16_VPCLMUL
 
 %ifdef LINUX
 %define arg1    rdi
@@ -91,12 +94,14 @@ extern asm_Eia3Round64B_16_VPCLMUL
 %define arg3    rdx
 %define arg4    rcx
 %define arg5    r8
+%define arg6    r9
 %else
 %define arg1    rcx
 %define arg2    rdx
 %define arg3    r8
 %define arg4    r9
 %define arg5    qword [rsp + 32]
+%define arg6    dword [rsp + 40]
 %endif
 
 %define state   arg1
@@ -113,7 +118,7 @@ endstruc
 %define OFS_R1  (16*(4*16))
 %define OFS_R2  (OFS_R1 + (4*16))
 
-section .text
+mksection .text
 
 %define APPEND(a,b) a %+ b
 
@@ -154,7 +159,44 @@ section .text
         and     lane, 0xF ;; just a nibble
         shr     unused_lanes, 4
         mov     tmp, [job + _iv]
-        mov     [state + _zuc_args_IV + lane*8], tmp
+        shl     lane, 5
+%if %%KEY_SIZE == 128
+        ; Read first 16 bytes of IV
+        vmovdqu xmm0, [tmp]
+        vmovdqa [state + _zuc_args_IV + lane], xmm0
+%else ;; %%KEY_SIZE == 256
+        cmp     qword [job + _iv_len_in_bytes], 25
+        je      %%_iv_size_25
+%%_iv_size_23:
+        ; Read 23 bytes of IV and expand to 25 bytes
+        ; then expand the last 6 bytes to 8 bytes
+
+        ; Read and write first 16 bytes
+        vmovdqu xmm0, [tmp]
+        vmovdqa [state + _zuc_args_IV + lane], xmm0
+        ; Read and write next byte
+        mov     al, [tmp + 16]
+        mov     [state + _zuc_args_IV + lane + 16], al
+        ; Read next 6 bytes
+        movzx   DWORD(tmp2), word [tmp + 17]
+        mov     DWORD(tmp3), [tmp + 19]
+        shl     tmp2, 32
+        or      tmp2, tmp3
+        ; Expand to 8 bytes and write
+        mov     tmp3, 0x3f3f3f3f3f3f3f3f
+        pdep    tmp2, tmp2, tmp3
+        mov     [state + _zuc_args_IV + lane + 17], tmp2
+
+        jmp     %%_iv_read
+%%_iv_size_25:
+        ; Read 25 bytes of IV
+        mov     DWORD(tmp2), 0x1ffffff
+        kmovd   k1, DWORD(tmp2)
+        vmovdqu8 ymm0{k1}, [tmp]
+        vmovdqa [state + _zuc_args_IV + lane], ymm0
+%%_iv_read:
+%endif
+        shr     lane, 5
         mov     [state + _zuc_unused_lanes], unused_lanes
         add	qword [state + _zuc_lanes_in_use], 1
 
@@ -402,11 +444,6 @@ section .text
         vpbroadcastq    zmm1, tmp3
         vmovdqu64       [state + _zuc_args_keys + (0*PTR_SZ)]{k1}, zmm1
         vmovdqu64       [state + _zuc_args_keys + (8*PTR_SZ)]{k2}, zmm1
-        ;; - IV pointer
-        mov             tmp3, [state + _zuc_args_IV + idx*8]
-        vpbroadcastq    zmm1, tmp3
-        vmovdqu64       [state + _zuc_args_IV + (0*PTR_SZ)]{k1}, zmm1
-        vmovdqu64       [state + _zuc_args_IV + (8*PTR_SZ)]{k2}, zmm1
 
         cmp     word [r12 + _zuc_init_not_done], 0
         je      %%skip_init_flush
@@ -565,13 +602,12 @@ FLUSH_JOB_ZUC256_EEA3:
         endbranch64
         FLUSH_JOB_ZUC_EEA3 256
 
-
 %macro ZUC_EIA3_16_BUFFER 5
 %define %%OOO           %1 ; [in] Pointer to ZUC OOO manager
 %define %%KEY_SIZE      %2 ; [constant] Key size (16 or 32)
 %define %%L             %3 ; [clobbered] Temporary GP register (dword)
 %define %%REMAIN_BITS   %4 ; [clobbered] Temporary GP register (dword)
-%define %%TMP           %5 ; [clobbered] Temporary GP register (dword)
+%define %%TMP           %5 ; [clobbered] Temporary GP register
 
         ; Find minimum length
         vmovdqa xmm0, [%%OOO + _zuc_lens]
@@ -579,9 +615,9 @@ FLUSH_JOB_ZUC256_EEA3:
         vmovdqa xmm1, [%%OOO + _zuc_lens + 16]
         vphminposuw xmm1, xmm1
         vpextrw %%REMAIN_BITS, xmm0, 0
-        vpextrw %%TMP, xmm1, 0
-        cmp     %%TMP, %%REMAIN_BITS
-        cmovbe  %%REMAIN_BITS, %%TMP
+        vpextrw DWORD(%%TMP), xmm1, 0
+        cmp     DWORD(%%TMP), %%REMAIN_BITS
+        cmovbe  %%REMAIN_BITS, DWORD(%%TMP)
 
         ; Get number of KS 32-bit words to generate ([length/32] + 2))
         lea     %%L, [%%REMAIN_BITS + 31 + (2 << 5)]
@@ -653,22 +689,39 @@ FLUSH_JOB_ZUC256_EEA3:
 
 %%_above_eq_16_loop:
 
-        ; Generate next 16 KS words
+        ; Generate next 16 KS words and digest 64 bytes of data
+%ifndef LINUX
+        ;; 48 bytes for 6 parameters
+        sub     rsp, 48
+%endif
+        mov     DWORD(%%TMP), %%L
+        shr     DWORD(%%TMP), 4 ; Number of rounds of 64 bytes
+
+        ;; Calculate number of remaining bits after function call
+        mov     eax, 64*8
+        mul     %%TMP
+        sub     %%REMAIN_BITS, eax
         lea     arg1, [%%OOO + _zuc_state]
         lea     arg2, [%%OOO + _zuc_args_KS]
-        mov     arg3, 64 ; offset = 64
-        call    ZUC_KEYGEN64B_16
+        lea     arg3, [%%OOO + _zuc_args_digest]
+        lea     arg4, [%%OOO + _zuc_args_in]
+%ifdef LINUX
+        mov     arg6, %%TMP
+        lea     arg5, [%%OOO + _zuc_lens]
+%else
+        mov     [rsp + 40], %%TMP
+        lea     %%TMP, [%%OOO + _zuc_lens]
+        mov     [rsp + 32], %%TMP
+%endif
 
-        sub     %%L, 16
+        call    ZUC_EIA3_N64B
 
-        ; Digest 64 bytes of data
-        lea     arg1, [%%OOO + _zuc_args_digest]
-        lea     arg2, [%%OOO + _zuc_args_KS]
-        lea     arg3, [%%OOO + _zuc_args_in]
-        lea     arg4, [%%OOO + _zuc_lens]
-        call    ZUC_ROUND64B
+%ifndef LINUX
+        ;; 48 bytes for 6 parameters
+        add     rsp, 48
+%endif
+        and     %%L, 0xf ; Remaining words of KS left to generate
 
-        sub     %%REMAIN_BITS, 64*8
         jmp     %%_loop
 
 %%_exit_loop:
@@ -747,7 +800,45 @@ FLUSH_JOB_ZUC256_EEA3:
         and	lane, 0xF           ;; just a nibble
         shr     unused_lanes, 4
         mov     tmp, [job + _zuc_eia3_iv]
-        mov     [state + _zuc_args_IV + lane*8], tmp
+        shl     lane, 5
+%if %%KEY_SIZE == 128
+        ; Read first 16 bytes of IV
+        vmovdqu xmm0, [tmp]
+        vmovdqa [state + _zuc_args_IV + lane], xmm0
+%else ;; %%KEY_SIZE == 256
+        ; Check if ZUC_EIA3._iv is not NULL, meaning a 25-byte IV can be parsed
+        or      tmp, tmp
+        jnz     %%_iv_size_25
+%%_iv_size_23:
+        ; Read 23 bytes of IV and expand to 25 bytes
+        ; then expand the last 6 bytes to 8 bytes
+        mov     tmp, [job + _zuc_eia3_iv23]
+        ; Read and write first 16 bytes
+        vmovdqu xmm0, [tmp]
+        vmovdqa [state + _zuc_args_IV + lane], xmm0
+        ; Read and write next byte
+        mov     al, [tmp + 16]
+        mov     [state + _zuc_args_IV + lane + 16], al
+        ; Read next 6 bytes
+        movzx   DWORD(tmp2), word [tmp + 17]
+        mov     DWORD(tmp3), [tmp + 19]
+        shl     tmp2, 32
+        or      tmp2, tmp3
+        ; Expand to 8 bytes and write
+        mov     tmp3, 0x3f3f3f3f3f3f3f3f
+        pdep    tmp2, tmp2, tmp3
+        mov     [state + _zuc_args_IV + lane + 17], tmp2
+
+        jmp     %%_iv_read
+%%_iv_size_25:
+        ; Read 25 bytes of IV
+        mov     DWORD(tmp2), 0x1ffffff
+        kmovd   k1, DWORD(tmp2)
+        vmovdqu8 ymm0{k1}, [tmp]
+        vmovdqa [state + _zuc_args_IV + lane], ymm0
+%%_iv_read:
+%endif
+        shr     lane, 5
         mov     [state + _zuc_unused_lanes], unused_lanes
         add	qword [state + _zuc_lanes_in_use], 1
 
@@ -828,7 +919,7 @@ FLUSH_JOB_ZUC256_EEA3:
 
 %endif ;; %%KEY_SIZE == 128
 
-        ZUC_EIA3_16_BUFFER r12, %%KEY_SIZE, DWORD(tmp), DWORD(tmp2), DWORD(tmp3)
+        ZUC_EIA3_16_BUFFER r12, %%KEY_SIZE, DWORD(tmp), DWORD(tmp2), tmp3
 
         mov     state, [rsp + _gpr_save + 8*8]
         mov     job,   [rsp + _gpr_save + 8*9]
@@ -975,11 +1066,6 @@ FLUSH_JOB_ZUC256_EEA3:
         vpbroadcastq    zmm1, tmp3
         vmovdqu64       [state + _zuc_args_keys + (0*PTR_SZ)]{k1}, zmm1
         vmovdqu64       [state + _zuc_args_keys + (8*PTR_SZ)]{k2}, zmm1
-        ;; - IV pointer
-        mov             tmp3, [state + _zuc_args_IV + idx*8]
-        vpbroadcastq    zmm1, tmp3
-        vmovdqu64       [state + _zuc_args_IV + (0*PTR_SZ)]{k1}, zmm1
-        vmovdqu64       [state + _zuc_args_IV + (8*PTR_SZ)]{k2}, zmm1
 
         ; Move state into r12, as register for state will be used
         ; to pass parameter to next function
@@ -1015,7 +1101,7 @@ FLUSH_JOB_ZUC256_EEA3:
 %endif ;; %%KEY_SIZE == 128
 
 %%skip_init_flush_eia3:
-        ZUC_EIA3_16_BUFFER r12, %%KEY_SIZE, DWORD(tmp), DWORD(tmp2), DWORD(tmp4)
+        ZUC_EIA3_16_BUFFER r12, %%KEY_SIZE, DWORD(tmp), DWORD(tmp2), tmp4
 
         mov     state, [rsp + _gpr_save + 8*8]
 
@@ -1119,6 +1205,4 @@ FLUSH_JOB_ZUC256_EIA3:
         endbranch64
         FLUSH_JOB_ZUC_EIA3 256
 
-%ifdef LINUX
-section .note.GNU-stack noalloc noexec nowrite progbits
-%endif
+mksection stack-noexec
