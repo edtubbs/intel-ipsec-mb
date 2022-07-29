@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2019-2021, Intel Corporation
+;; Copyright (c) 2019-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -33,4 +33,4 @@
 %define ENC_NO_CTR_FN_NAME submit_job_pon_enc_no_ctr_sse_no_aesni
 %define HEC_32 hec_32_sse_no_aesni
 %define HEC_64 hec_64_sse_no_aesni
-%include "sse/pon_by8_sse.asm"
+%include "sse_t1/pon_by8_sse.asm"

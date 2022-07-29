@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2019-2021, Intel Corporation
+;; Copyright (c) 2019-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -29,4 +29,4 @@
 %define AES_CBC_MAC aes128_cbc_mac_x4_no_aesni
 %define SUBMIT_JOB_AES_CCM_AUTH submit_job_aes128_ccm_auth_sse_no_aesni
 %define FLUSH_JOB_AES_CCM_AUTH flush_job_aes128_ccm_auth_sse_no_aesni
-%include "sse/mb_mgr_aes128_ccm_auth_submit_flush_x4_sse.asm"
+%include "sse_t1/mb_mgr_aes128_ccm_auth_submit_flush_x4_sse.asm"

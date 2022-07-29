@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2012-2021, Intel Corporation
+;; Copyright (c) 2012-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -152,6 +152,7 @@ aes128_ecbenc_x3_sse_return:
 %endif
 	ret
 
+%ifdef AESNI_EMU
 MKGLOBAL(aes128_ecbenc_x3_sse_no_aesni,function,internal)
 aes128_ecbenc_x3_sse_no_aesni:
 
@@ -243,6 +244,7 @@ aes128_ecbenc_x3_sse_no_aesni_return:
         clear_scratch_xmms_sse_asm
 %endif
 	ret
+%endif ; AESNI_EMU
 
 	;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 	;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

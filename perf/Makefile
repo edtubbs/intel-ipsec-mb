@@ -1,4 +1,4 @@
-# Copyright (c) 2017-2021, Intel Corporation
+# Copyright (c) 2017-2022, Intel Corporation
 # 
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
@@ -36,7 +36,12 @@ CFLAGS = -D_GNU_SOURCE -DNO_COMPAT_IMB_API_053 $(INCLUDES) \
 	-Wformat -Wformat-security \
 	-Wunreachable-code -Wmissing-noreturn -Wsign-compare -Wno-endif-labels \
 	-Wstrict-prototypes -Wmissing-prototypes -Wold-style-definition \
-	-pthread -fno-strict-overflow -fno-delete-null-pointer-checks -fwrapv
+	-pthread -fno-delete-null-pointer-checks -fwrapv
+
+# -fno-strict-overflow is not supported by clang
+ifneq ($(CC),clang)
+CFLAGS += -fno-strict-overflow
+endif
 
 ifeq ($(MINGW),0)
 CFLAGS += -DLINUX
@@ -121,4 +126,5 @@ style:
 	$(CHECKPATCH) --no-tree --no-signoff --emacs --no-color \
 --ignore CODE_INDENT,INITIALISED_STATIC,LEADING_SPACE,SPLIT_STRING,\
 UNSPECIFIED_INT,ARRAY_SIZE,BLOCK_COMMENT_STYLE,GLOBAL_INITIALISERS,\
-COMPLEX_MACRO,SPACING,STORAGE_CLASS,USE_FUNC,NEW_TYPEDEFS $(SOURCES_STYLE)
+COMPLEX_MACRO,SPACING,STORAGE_CLASS,USE_FUNC,NEW_TYPEDEFS,VOLATILE,\
+CONSTANT_COMPARISON $(SOURCES_STYLE)

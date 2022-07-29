@@ -1,5 +1,5 @@
 /**********************************************************************
-  Copyright(c) 2019-2021, Intel Corporation All rights reserved.
+  Copyright(c) 2019-2022, Intel Corporation All rights reserved.
 
   Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions
@@ -70,8 +70,10 @@
 #define MAX_GCM_AAD_SIZE 1024
 #define MAX_CCM_AAD_SIZE 46
 #define MAX_AAD_SIZE 1024
+#define NUM_TAG_SIZES 7
 
 #define MAX_IV_SIZE 25 /* IV size for ZUC-256 */
+#define MAX_TAG_SIZE 16 /* Max tag size for ZUC-256 */
 
 #define MAX_NUM_JOBS 32
 #define IMIX_ITER 1000
@@ -83,6 +85,10 @@
 #define SEED 0xdeadcafe
 #define STACK_DEPTH 8192
 
+/* Max safe check retries to eliminate false positives */
+#define MAX_SAFE_RETRIES 100
+#define DEFAULT_SAFE_RETRIES 2
+
 static int pattern_auth_key;
 static int pattern_cipher_key;
 static int pattern_plain_text;
@@ -91,8 +97,6 @@ static uint64_t pattern8_cipher_key;
 static uint64_t pattern8_plain_text;
 
 #define MAX_OOO_MGR_SIZE 8192
-#define OOO_MGR_FIRST aes128_ooo
-#define OOO_MGR_LAST  zuc_eia3_ooo
 
 /* Struct storing cipher parameters */
 struct params_s {
@@ -131,6 +135,7 @@ struct data {
         uint8_t auth_key[MAX_KEY_SIZE];
         struct cipher_auth_keys enc_keys;
         struct cipher_auth_keys dec_keys;
+        uint8_t tag_size;
 };
 
 struct custom_job_params {
@@ -487,6 +492,12 @@ struct str_value_mapping hash_algo_str_map[] = {
                         .hash_alg = IMB_AUTH_ZUC256_EIA3_BITLEN,
                 }
         },
+        {
+                .name = "GHASH",
+                .values.job_params = {
+                        .hash_alg = IMB_AUTH_GHASH,
+                }
+        },
 };
 
 struct str_value_mapping aead_algo_str_map[] = {
@@ -566,12 +577,10 @@ struct str_value_mapping aead_algo_str_map[] = {
 
 /* This struct stores all information about performed test case */
 struct variant_s {
-        uint32_t arch;
         struct params_s params;
-        uint64_t *avg_times;
 };
 
-const uint8_t auth_tag_length_bytes[] = {
+const uint8_t auth_tag_len_bytes[] = {
                 12, /* IMB_AUTH_HMAC_SHA_1 */
                 14, /* IMB_AUTH_HMAC_SHA_224 */
                 16, /* IMB_AUTH_HMAC_SHA_256 */
@@ -604,7 +613,7 @@ const uint8_t auth_tag_length_bytes[] = {
                 16, /* IMB_AUTH_CHACHA20_POLY1305_SGL */
                 4,  /* IMB_AUTH_ZUC256_EIA3_BITLEN */
                 16, /* IMB_AUTH_SNOW_V_AEAD */
-                16, /* IMB_AUTH_CRC32_ETHERNET_FCS */
+                16, /* IMB_AUTH_AES_GCM_SGL */
                 4,  /* IMB_AUTH_CRC32_ETHERNET_FCS */
                 4,  /* IMB_AUTH_CRC32_SCTP */
                 4,  /* IMB_AUTH_CRC32_WIMAX_OFDMA_DATA */
@@ -617,6 +626,7 @@ const uint8_t auth_tag_length_bytes[] = {
                 4,  /* IMB_AUTH_CRC8_WIMAX_OFDMA_HCS */
                 4,  /* IMB_AUTH_CRC7_FP_HEADER */
                 4,  /* IMB_AUTH_CRC6_IUUP_HEADER */
+                16, /* IMB_AUTH_GHASH */
 };
 
 /* Minimum, maximum and step values of key sizes */
@@ -647,6 +657,7 @@ const uint8_t key_sizes[][3] = {
 
 uint8_t custom_test = 0;
 uint8_t verbose = 0;
+uint32_t safe_retries = DEFAULT_SAFE_RETRIES;
 
 enum range {
         RANGE_MIN = 0,
@@ -659,12 +670,13 @@ uint32_t job_sizes[NUM_RANGE] = {DEFAULT_JOB_SIZE_MIN,
                                  DEFAULT_JOB_SIZE_STEP,
                                  DEFAULT_JOB_SIZE_MAX};
 /* Max number of jobs to submit in IMIX testing */
-uint32_t max_num_jobs = 16;
+uint32_t max_num_jobs = 17;
 /* IMIX disabled by default */
 unsigned int imix_enabled = 0;
 /* cipher and authentication IV sizes */
 uint32_t cipher_iv_size = 0;
 uint32_t auth_iv_size = 0;
+uint8_t auth_tag_size = 0;
 
 struct custom_job_params custom_job_params = {
         .cipher_mode  = IMB_CIPHER_NULL,
@@ -677,6 +689,35 @@ uint8_t enc_archs[IMB_ARCH_NUM] = {0, 0, 1, 1, 1, 1};
 uint8_t dec_archs[IMB_ARCH_NUM] = {0, 0, 1, 1, 1, 1};
 
 uint64_t flags = 0; /* flags passed to alloc_mb_mgr() */
+
+/* 0 => not possible, 1 => possible */
+int is_avx_sse_check_possible = 0;
+
+static void
+avx_sse_check(const char *ctx_str,
+              const IMB_HASH_ALG hash_alg,
+              const IMB_CIPHER_MODE cipher_mode)
+{
+        if (!is_avx_sse_check_possible)
+                return;
+
+        const uint32_t avx_sse_flag = avx_sse_transition_check();
+
+        if (!avx_sse_flag)
+                return;
+
+        const char *hash_str = misc_hash_alg_to_str(hash_alg);
+        const char *cipher_str = misc_cipher_mode_to_str(cipher_mode);
+
+        if (avx_sse_flag & MISC_AVX_SSE_ZMM0_15_ISSUE)
+                printf("ERROR: AVX-SSE transition after %s in ZMM0-ZMM15: "
+                       "HASH=%s, CIPHER=%s\n",
+                       ctx_str, hash_str, cipher_str);
+        else if (avx_sse_flag & MISC_AVX_SSE_YMM0_15_ISSUE)
+                printf("ERROR: AVX-SSE transition after %s in YMM0-YMM15: "
+                       "HASH=%s, CIPHER=%s\n",
+                       ctx_str, hash_str, cipher_str);
+}
 
 static void
 clear_data(struct data *data)
@@ -714,12 +755,12 @@ static void generate_patterns(void)
                  pattern_cipher_key == 0 ||
                  pattern_plain_text == 0);
 
-        memset(&pattern8_auth_key, pattern_auth_key,
-               sizeof(pattern8_auth_key));
-        memset(&pattern8_cipher_key, pattern_cipher_key,
-               sizeof(pattern8_cipher_key));
-        memset(&pattern8_plain_text, pattern_plain_text,
-               sizeof(pattern8_plain_text));
+        nosimd_memset(&pattern8_auth_key, pattern_auth_key,
+                sizeof(pattern8_auth_key));
+        nosimd_memset(&pattern8_cipher_key, pattern_cipher_key,
+                sizeof(pattern8_cipher_key));
+        nosimd_memset(&pattern8_plain_text, pattern_plain_text,
+                sizeof(pattern8_plain_text));
 
         printf(">>> Patterns: AUTH_KEY = 0x%02x, CIPHER_KEY = 0x%02x, "
                "PLAIN_TEXT = 0x%02x\n",
@@ -737,6 +778,7 @@ search_patterns(const void *ptr, const size_t mem_size)
 {
         const uint8_t *ptr8 = (const uint8_t *) ptr;
         const size_t limit = mem_size - sizeof(uint64_t);
+        const char *err_str = "";
         int ret = -1;
         size_t i;
 
@@ -749,14 +791,13 @@ search_patterns(const void *ptr, const size_t mem_size)
                 const uint64_t string = *((const uint64_t *) &ptr8[i]);
 
                 if (string == pattern8_cipher_key) {
-                        fprintf(stderr, "Part of CIPHER_KEY is present\n");
+                        err_str = "Part of CIPHER_KEY is present";
                         ret = 0;
                 } else if (string == pattern8_auth_key) {
-                        fprintf(stderr, "Part of AUTH_KEY is present\n");
+                        err_str = "Part of AUTH_KEY is present";
                         ret = 0;
                 } else if (string == pattern8_plain_text) {
-                        fprintf(stderr,
-                                "Part of plain/ciphertext is present\n");
+                        err_str = "Part of plain/ciphertext is present";
                         ret = 0;
                 }
 
@@ -765,15 +806,17 @@ search_patterns(const void *ptr, const size_t mem_size)
         }
 
         if (ret != -1) {
-                size_t len_to_print = mem_size - i;
+                static uint8_t tb[64];
+                const size_t len_to_print =
+                        (mem_size - i) > sizeof(tb) ? sizeof(tb) : mem_size - i;
 
+                nosimd_memcpy(tb, &ptr8[i], len_to_print);
+
+                fprintf(stderr, "%s\n", err_str);
                 fprintf(stderr, "Offset = %zu bytes, Addr = %p, RSP = %p\n",
                         i, &ptr8[i], rdrsp());
 
-                if (len_to_print > 64)
-                        len_to_print = 64;
-
-                hexdump_ex(stderr, NULL, &ptr8[i], len_to_print, &ptr8[i]);
+                hexdump_ex(stderr, NULL, tb, len_to_print, &ptr8[i]);
                 return 0;
         }
 
@@ -783,18 +826,20 @@ search_patterns(const void *ptr, const size_t mem_size)
 static size_t
 calculate_ooo_mgr_size(const void *ptr)
 {
+        const size_t max_size = MAX_OOO_MGR_SIZE - sizeof(uint64_t);
         size_t i;
 
-        for (i = 0; i <= (MAX_OOO_MGR_SIZE - sizeof(uint64_t)); i++) {
-                const uint64_t end_of_ooo_pattern = 0xDEADCAFEDEADCAFE;
+        for (i = 0; i <= max_size; i++) {
+                const uint64_t end_of_ooo_pattern = 0xDEADCAFEDEADCAFEULL;
                 const uint8_t *ptr8 = (const uint8_t *) ptr;
-                const uint64_t string = *((const uint64_t *) &ptr8[i]);
+                const uint64_t *ptr64 = (const uint64_t *) &ptr8[i];
 
-                if (string == end_of_ooo_pattern)
+                if (*ptr64 == end_of_ooo_pattern)
                         return i + sizeof(uint64_t);
         }
 
         /* no marker found */
+        fprintf(stderr, "No road-block marker found for %p manager!\n", ptr);
         return MAX_OOO_MGR_SIZE;
 }
 
@@ -990,6 +1035,10 @@ fill_job(IMB_JOB *job, const struct params_s *params,
                 job->u.GMAC._iv = auth_iv;
                 job->u.GMAC.iv_len_in_bytes = 12;
                 break;
+        case IMB_AUTH_GHASH:
+                job->u.GHASH._key = gdata_key;
+                job->u.GHASH._init_tag = auth_iv;
+                break;
         case IMB_AUTH_PON_CRC_BIP:
         case IMB_AUTH_NULL:
         case IMB_AUTH_AES_GMAC:
@@ -1029,12 +1078,12 @@ fill_job(IMB_JOB *job, const struct params_s *params,
                 job->u.SNOW_V_AEAD.aad = aad;
                 break;
         default:
-                printf("Unsupported hash algorithm %u, line %u\n",
+                printf("Unsupported hash algorithm %u, line %d\n",
                        (unsigned) params->hash_alg, __LINE__);
                 return -1;
         }
 
-        job->auth_tag_output_len_in_bytes = tag_size;
+        job->auth_tag_output_len_in_bytes = (uint64_t) tag_size;
 
         job->cipher_direction = cipher_dir;
 
@@ -1187,19 +1236,19 @@ prepare_keys(IMB_MGR *mb_mgr, struct cipher_auth_keys *keys,
         if (force_pattern) {
                 switch (params->hash_alg) {
                 case IMB_AUTH_AES_XCBC:
-                        memset(k1_expanded, pattern_auth_key,
+                        nosimd_memset(k1_expanded, pattern_auth_key,
                                sizeof(keys->k1_expanded));
                         break;
                 case IMB_AUTH_AES_CMAC:
                 case IMB_AUTH_AES_CMAC_BITLEN:
                 case IMB_AUTH_AES_CMAC_256:
-                        memset(k1_expanded, pattern_auth_key,
+                        nosimd_memset(k1_expanded, pattern_auth_key,
                                sizeof(keys->k1_expanded));
-                        memset(k2, pattern_auth_key, sizeof(keys->k2));
-                        memset(k3, pattern_auth_key, sizeof(keys->k3));
+                        nosimd_memset(k2, pattern_auth_key, sizeof(keys->k2));
+                        nosimd_memset(k3, pattern_auth_key, sizeof(keys->k3));
                         break;
                 case IMB_AUTH_POLY1305:
-                        memset(k1_expanded, pattern_auth_key,
+                        nosimd_memset(k1_expanded, pattern_auth_key,
                                sizeof(keys->k1_expanded));
                         break;
                 case IMB_AUTH_HMAC_SHA_1:
@@ -1208,14 +1257,16 @@ prepare_keys(IMB_MGR *mb_mgr, struct cipher_auth_keys *keys,
                 case IMB_AUTH_HMAC_SHA_384:
                 case IMB_AUTH_HMAC_SHA_512:
                 case IMB_AUTH_MD5:
-                        memset(ipad, pattern_auth_key, sizeof(keys->ipad));
-                        memset(opad, pattern_auth_key, sizeof(keys->opad));
+                        nosimd_memset(ipad, pattern_auth_key,
+                                      sizeof(keys->ipad));
+                        nosimd_memset(opad, pattern_auth_key,
+                                      sizeof(keys->opad));
                         break;
                 case IMB_AUTH_ZUC_EIA3_BITLEN:
                 case IMB_AUTH_ZUC256_EIA3_BITLEN:
                 case IMB_AUTH_SNOW3G_UIA2_BITLEN:
                 case IMB_AUTH_KASUMI_UIA1:
-                        memset(k3, pattern_auth_key, sizeof(keys->k3));
+                        nosimd_memset(k3, pattern_auth_key, sizeof(keys->k3));
                         break;
                 case IMB_AUTH_AES_CCM:
                 case IMB_AUTH_AES_GMAC:
@@ -1248,19 +1299,20 @@ prepare_keys(IMB_MGR *mb_mgr, struct cipher_auth_keys *keys,
                 case IMB_AUTH_AES_GMAC_128:
                 case IMB_AUTH_AES_GMAC_192:
                 case IMB_AUTH_AES_GMAC_256:
-                        memset(gdata_key, pattern_auth_key,
+                case IMB_AUTH_GHASH:
+                        nosimd_memset(gdata_key, pattern_auth_key,
                                sizeof(keys->gdata_key));
                         break;
                 default:
                         fprintf(stderr,
-                                "Unsupported hash algorithm %u, line %u\n",
+                                "Unsupported hash algorithm %u, line %d\n",
                                 (unsigned) params->hash_alg, __LINE__);
                         return -1;
                 }
 
                 switch (params->cipher_mode) {
                 case IMB_CIPHER_GCM:
-                        memset(gdata_key, pattern_cipher_key,
+                        nosimd_memset(gdata_key, pattern_cipher_key,
                                 sizeof(keys->gdata_key));
                         break;
                 case IMB_CIPHER_PON_AES_CNTR:
@@ -1271,20 +1323,20 @@ prepare_keys(IMB_MGR *mb_mgr, struct cipher_auth_keys *keys,
                 case IMB_CIPHER_DOCSIS_SEC_BPI:
                 case IMB_CIPHER_ECB:
                 case IMB_CIPHER_CBCS_1_9:
-                        memset(enc_keys, pattern_cipher_key,
+                        nosimd_memset(enc_keys, pattern_cipher_key,
                                sizeof(keys->enc_keys));
-                        memset(dec_keys, pattern_cipher_key,
+                        nosimd_memset(dec_keys, pattern_cipher_key,
                                sizeof(keys->dec_keys));
                         break;
                 case IMB_CIPHER_DES:
                 case IMB_CIPHER_DES3:
                 case IMB_CIPHER_DOCSIS_DES:
-                        memset(enc_keys, pattern_cipher_key,
+                        nosimd_memset(enc_keys, pattern_cipher_key,
                                sizeof(keys->enc_keys));
                         break;
                 case IMB_CIPHER_SNOW3G_UEA2_BITLEN:
                 case IMB_CIPHER_KASUMI_UEA1_BITLEN:
-                        memset(k2, pattern_cipher_key, 16);
+                        nosimd_memset(k2, pattern_cipher_key, 16);
                         break;
                 case IMB_CIPHER_ZUC_EEA3:
                 case IMB_CIPHER_CHACHA20:
@@ -1292,7 +1344,7 @@ prepare_keys(IMB_MGR *mb_mgr, struct cipher_auth_keys *keys,
                 case IMB_CIPHER_CHACHA20_POLY1305_SGL:
                 case IMB_CIPHER_SNOW_V:
                 case IMB_CIPHER_SNOW_V_AEAD:
-                        memset(k2, pattern_cipher_key, 32);
+                        nosimd_memset(k2, pattern_cipher_key, 32);
                         break;
                 case IMB_CIPHER_NULL:
                         /* No operation needed */
@@ -1320,13 +1372,13 @@ prepare_keys(IMB_MGR *mb_mgr, struct cipher_auth_keys *keys,
                 break;
         case IMB_AUTH_HMAC_SHA_1:
                 /* compute ipad hash */
-                memset(buf, 0x36, IMB_SHA1_BLOCK_SIZE);
+                nosimd_memset(buf, 0x36, IMB_SHA1_BLOCK_SIZE);
                 for (i = 0; i < IMB_SHA1_BLOCK_SIZE; i++)
                         buf[i] ^= auth_key[i];
                 IMB_SHA1_ONE_BLOCK(mb_mgr, buf, ipad);
 
                 /* compute opad hash */
-                memset(buf, 0x5c, IMB_SHA1_BLOCK_SIZE);
+                nosimd_memset(buf, 0x5c, IMB_SHA1_BLOCK_SIZE);
                 for (i = 0; i < IMB_SHA1_BLOCK_SIZE; i++)
                         buf[i] ^= auth_key[i];
                 IMB_SHA1_ONE_BLOCK(mb_mgr, buf, opad);
@@ -1334,13 +1386,13 @@ prepare_keys(IMB_MGR *mb_mgr, struct cipher_auth_keys *keys,
                 break;
         case IMB_AUTH_HMAC_SHA_224:
                 /* compute ipad hash */
-                memset(buf, 0x36, IMB_SHA_256_BLOCK_SIZE);
+                nosimd_memset(buf, 0x36, IMB_SHA_256_BLOCK_SIZE);
                 for (i = 0; i < IMB_SHA_256_BLOCK_SIZE; i++)
                         buf[i] ^= auth_key[i];
                 IMB_SHA224_ONE_BLOCK(mb_mgr, buf, ipad);
 
                 /* compute opad hash */
-                memset(buf, 0x5c, IMB_SHA_256_BLOCK_SIZE);
+                nosimd_memset(buf, 0x5c, IMB_SHA_256_BLOCK_SIZE);
                 for (i = 0; i < IMB_SHA_256_BLOCK_SIZE; i++)
                         buf[i] ^= auth_key[i];
                 IMB_SHA224_ONE_BLOCK(mb_mgr, buf, opad);
@@ -1348,13 +1400,13 @@ prepare_keys(IMB_MGR *mb_mgr, struct cipher_auth_keys *keys,
                 break;
         case IMB_AUTH_HMAC_SHA_256:
                 /* compute ipad hash */
-                memset(buf, 0x36, IMB_SHA_256_BLOCK_SIZE);
+                nosimd_memset(buf, 0x36, IMB_SHA_256_BLOCK_SIZE);
                 for (i = 0; i < IMB_SHA_256_BLOCK_SIZE; i++)
                         buf[i] ^= auth_key[i];
                 IMB_SHA256_ONE_BLOCK(mb_mgr, buf, ipad);
 
                 /* compute opad hash */
-                memset(buf, 0x5c, IMB_SHA_256_BLOCK_SIZE);
+                nosimd_memset(buf, 0x5c, IMB_SHA_256_BLOCK_SIZE);
                 for (i = 0; i < IMB_SHA_256_BLOCK_SIZE; i++)
                         buf[i] ^= auth_key[i];
                 IMB_SHA256_ONE_BLOCK(mb_mgr, buf, opad);
@@ -1362,13 +1414,13 @@ prepare_keys(IMB_MGR *mb_mgr, struct cipher_auth_keys *keys,
                 break;
         case IMB_AUTH_HMAC_SHA_384:
                 /* compute ipad hash */
-                memset(buf, 0x36, IMB_SHA_384_BLOCK_SIZE);
+                nosimd_memset(buf, 0x36, IMB_SHA_384_BLOCK_SIZE);
                 for (i = 0; i < IMB_SHA_384_BLOCK_SIZE; i++)
                         buf[i] ^= auth_key[i];
                 IMB_SHA384_ONE_BLOCK(mb_mgr, buf, ipad);
 
                 /* compute opad hash */
-                memset(buf, 0x5c, IMB_SHA_384_BLOCK_SIZE);
+                nosimd_memset(buf, 0x5c, IMB_SHA_384_BLOCK_SIZE);
                 for (i = 0; i < IMB_SHA_384_BLOCK_SIZE; i++)
                         buf[i] ^= auth_key[i];
                 IMB_SHA384_ONE_BLOCK(mb_mgr, buf, opad);
@@ -1376,13 +1428,13 @@ prepare_keys(IMB_MGR *mb_mgr, struct cipher_auth_keys *keys,
                 break;
         case IMB_AUTH_HMAC_SHA_512:
                 /* compute ipad hash */
-                memset(buf, 0x36, IMB_SHA_512_BLOCK_SIZE);
+                nosimd_memset(buf, 0x36, IMB_SHA_512_BLOCK_SIZE);
                 for (i = 0; i < IMB_SHA_512_BLOCK_SIZE; i++)
                         buf[i] ^= auth_key[i];
                 IMB_SHA512_ONE_BLOCK(mb_mgr, buf, ipad);
 
                 /* compute opad hash */
-                memset(buf, 0x5c, IMB_SHA_512_BLOCK_SIZE);
+                nosimd_memset(buf, 0x5c, IMB_SHA_512_BLOCK_SIZE);
                 for (i = 0; i < IMB_SHA_512_BLOCK_SIZE; i++)
                         buf[i] ^= auth_key[i];
                 IMB_SHA512_ONE_BLOCK(mb_mgr, buf, opad);
@@ -1390,13 +1442,13 @@ prepare_keys(IMB_MGR *mb_mgr, struct cipher_auth_keys *keys,
                 break;
         case IMB_AUTH_MD5:
                 /* compute ipad hash */
-                memset(buf, 0x36, 64);
+                nosimd_memset(buf, 0x36, 64);
                 for (i = 0; i < 64; i++)
                         buf[i] ^= auth_key[i];
                 IMB_MD5_ONE_BLOCK(mb_mgr, buf, ipad);
 
                 /* compute opad hash */
-                memset(buf, 0x5c, 64);
+                nosimd_memset(buf, 0x5c, 64);
                 for (i = 0; i < 64; i++)
                         buf[i] ^= auth_key[i];
                 IMB_MD5_ONE_BLOCK(mb_mgr, buf, opad);
@@ -1406,7 +1458,7 @@ prepare_keys(IMB_MGR *mb_mgr, struct cipher_auth_keys *keys,
         case IMB_AUTH_ZUC256_EIA3_BITLEN:
         case IMB_AUTH_SNOW3G_UIA2_BITLEN:
         case IMB_AUTH_KASUMI_UIA1:
-                memcpy(k2, auth_key, sizeof(keys->k2));
+                nosimd_memcpy(k2, auth_key, sizeof(keys->k2));
                 break;
         case IMB_AUTH_AES_GMAC_128:
                 IMB_AES128_GCM_PRE(mb_mgr, auth_key, gdata_key);
@@ -1416,6 +1468,9 @@ prepare_keys(IMB_MGR *mb_mgr, struct cipher_auth_keys *keys,
                 break;
         case IMB_AUTH_AES_GMAC_256:
                 IMB_AES256_GCM_PRE(mb_mgr, auth_key, gdata_key);
+                break;
+        case IMB_AUTH_GHASH:
+                IMB_GHASH_PRE(mb_mgr, auth_key, gdata_key);
                 break;
         case IMB_AUTH_AES_CCM:
         case IMB_AUTH_AES_GMAC:
@@ -1446,10 +1501,10 @@ prepare_keys(IMB_MGR *mb_mgr, struct cipher_auth_keys *keys,
                 /* No operation needed */
                 break;
         case IMB_AUTH_POLY1305:
-                memcpy(k1_expanded, auth_key, 32);
+                nosimd_memcpy(k1_expanded, auth_key, 32);
                 break;
         default:
-                fprintf(stderr, "Unsupported hash algorithm %u, line %u\n",
+                fprintf(stderr, "Unsupported hash algorithm %u, line %d\n",
                         (unsigned) params->hash_alg, __LINE__);
                 return -1;
         }
@@ -1516,7 +1571,7 @@ prepare_keys(IMB_MGR *mb_mgr, struct cipher_auth_keys *keys,
                 break;
         case IMB_CIPHER_SNOW3G_UEA2_BITLEN:
         case IMB_CIPHER_KASUMI_UEA1_BITLEN:
-                memcpy(k2, ciph_key, 16);
+                nosimd_memcpy(k2, ciph_key, 16);
                 break;
         case IMB_CIPHER_ZUC_EEA3:
         case IMB_CIPHER_CHACHA20:
@@ -1525,12 +1580,12 @@ prepare_keys(IMB_MGR *mb_mgr, struct cipher_auth_keys *keys,
         case IMB_CIPHER_SNOW_V:
         case IMB_CIPHER_SNOW_V_AEAD:
                 /* Use of:
-                 *     memcpy(k2, ciph_key, 32);
+                 *     nosimd_memcpy(k2, ciph_key, 32);
                  * leaves sensitive data on the stack.
                  * Copying data in 16 byte chunks instead.
                  */
-                memcpy(k2, ciph_key, 16);
-                memcpy(k2 + 16, ciph_key + 16, 16);
+                nosimd_memcpy(k2, ciph_key, 16);
+                nosimd_memcpy(k2 + 16, ciph_key + 16, 16);
                 break;
         case IMB_CIPHER_NULL:
                 /* No operation needed */
@@ -1587,7 +1642,7 @@ modify_docsis_crc32_test_buf(uint8_t *test_buf,
         if (buf_size >=
             (IMB_DOCSIS_CRC32_MIN_ETH_PDU_SIZE + IMB_DOCSIS_CRC32_TAG_SIZE)) {
                 /* Set plaintext CRC32 in the test buffer */
-                memcpy(&test_buf[buf_size - IMB_DOCSIS_CRC32_TAG_SIZE],
+                nosimd_memcpy(&test_buf[buf_size - IMB_DOCSIS_CRC32_TAG_SIZE],
                        job->auth_tag_output, IMB_DOCSIS_CRC32_TAG_SIZE);
         }
 }
@@ -1654,44 +1709,42 @@ perform_safe_checks(IMB_MGR *mgr, const IMB_ARCH arch, const char *dir)
         }
 
         /* search OOO managers */
-        for (ooo_ptr = &mgr->OOO_MGR_FIRST, i = 0;
-             ooo_ptr <= &mgr->OOO_MGR_LAST;
+        for (ooo_ptr = &mgr->aes128_ooo, i = 0;
+             ooo_ptr < &mgr->end_ooo;
              ooo_ptr++, i++) {
+                static const char * const ooo_names[] = {
+                        "aes128_ooo", "aes192_ooo", "aes256_ooo",
+                        "docsis128_sec_ooo", "docsis128_crc32_sec_ooo",
+                        "docsis256_sec_ooo", "docsis256_crc32_sec_ooo",
+                        "des_enc_ooo", "des_dec_ooo",
+                        "des3_enc_ooo", "des3_dec_ooo",
+                        "docsis_des_enc_ooo", "docsis_des_dec_ooo",
+                        "hmac_sha_1_ooo",
+                        "hmac_sha_224_ooo", "hmac_sha_256_ooo",
+                        "hmac_sha_384_ooo", "hmac_sha_512_ooo",
+                        "hmac_md5_ooo",
+                        "aes_xcbc_ooo", "aes_ccm_ooo", "aes_cmac_ooo",
+                        "zuc_eea3_ooo", "zuc_eia3_ooo",
+                        "aes128_cbcs_ooo",
+                        "zuc256_eea3_ooo", "zuc256_eia3_ooo",
+                        "aes256_ccm_ooo", "aes256_cmac_ooo",
+                        "snow3g_uea2_ooo", "snow3g_uia2_ooo",
+                        "sha_1_ooo", "sha_224_ooo", "sha_256_ooo",
+                        "sha_384_ooo", "sha_512_ooo",
+                        "end_ooo" /* add new ooo manager above this line */
+                };
                 void *ooo_mgr_p = *ooo_ptr;
 
                 if (search_patterns(ooo_mgr_p,
                                     get_ooo_mgr_size(ooo_mgr_p, i)) == 0) {
                         fprintf(stderr,
-                                "Pattern found in 000 MGR (%d) after %s data\n",
-                                (int)(ooo_ptr - &mgr->OOO_MGR_FIRST), dir);
+                                "Pattern found in OOO MGR (index=%u,\"%s\") after %s data\n",
+                                i, ooo_names[i], dir);
                         return -1;
                 }
         }
 
         return 0;
-}
-
-static void
-clear_scratch_simd(const IMB_ARCH arch)
-{
-        switch (arch) {
-        case IMB_ARCH_SSE:
-        case IMB_ARCH_NOAESNI:
-                clr_scratch_xmms_sse();
-                break;
-        case IMB_ARCH_AVX:
-                clr_scratch_xmms_avx();
-                break;
-        case IMB_ARCH_AVX2:
-                clr_scratch_ymms();
-                break;
-        case IMB_ARCH_AVX512:
-                clr_scratch_zmms();
-                break;
-        default:
-                fprintf(stderr, "Invalid architecture\n");
-                exit(EXIT_FAILURE);
-        }
 }
 
 /* Performs test using AES_HMAC or DOCSIS */
@@ -1705,7 +1758,6 @@ do_test(IMB_MGR *enc_mb_mgr, const IMB_ARCH enc_arch,
         IMB_JOB *job;
         uint32_t i, imix_job_idx = 0;
         int ret = -1;
-        uint8_t tag_size = auth_tag_length_bytes[params->hash_alg - 1];
         uint64_t xgem_hdr[MAX_NUM_JOBS] = {0};
         uint8_t tag_size_to_check[MAX_NUM_JOBS];
         struct cipher_auth_keys *enc_keys = &data->enc_keys;
@@ -1723,6 +1775,7 @@ do_test(IMB_MGR *enc_mb_mgr, const IMB_ARCH enc_arch,
         unsigned int num_processed_jobs = 0;
         uint8_t next_iv[IMB_AES_BLOCK_SIZE];
         uint16_t pli = 0;
+        uint8_t tag_size = data->tag_size;
 
         if (num_jobs == 0)
                 return ret;
@@ -1735,8 +1788,8 @@ do_test(IMB_MGR *enc_mb_mgr, const IMB_ARCH enc_arch,
         generate_random_buf(auth_iv, MAX_IV_SIZE);
         generate_random_buf(aad, MAX_AAD_SIZE);
         if (safe_check) {
-                memset(ciph_key, pattern_cipher_key, MAX_KEY_SIZE);
-                memset(auth_key, pattern_auth_key, MAX_KEY_SIZE);
+                nosimd_memset(ciph_key, pattern_cipher_key, MAX_KEY_SIZE);
+                nosimd_memset(auth_key, pattern_auth_key, MAX_KEY_SIZE);
         } else {
                 generate_random_buf(ciph_key, MAX_KEY_SIZE);
                 generate_random_buf(auth_key, MAX_KEY_SIZE);
@@ -1813,7 +1866,8 @@ do_test(IMB_MGR *enc_mb_mgr, const IMB_ARCH enc_arch,
                 }
 
                 if (safe_check)
-                        memset(test_buf[i], pattern_plain_text, buf_sizes[i]);
+                        nosimd_memset(test_buf[i], pattern_plain_text,
+                                      buf_sizes[i]);
                 else
                         generate_random_buf(test_buf[i], buf_sizes[i]);
 
@@ -1844,7 +1898,6 @@ do_test(IMB_MGR *enc_mb_mgr, const IMB_ARCH enc_arch,
                 /* Clear scratch registers before expanding keys to prevent
                  * other functions from storing sensitive data in stack
                  */
-                clear_scratch_simd(enc_arch);
                 if (prepare_keys(enc_mb_mgr, enc_keys, ciph_key, auth_key,
                                  params, 0) < 0)
                         goto exit;
@@ -1923,7 +1976,7 @@ do_test(IMB_MGR *enc_mb_mgr, const IMB_ARCH enc_arch,
                  * Encrypt + generate digest from encrypted message
                  * using architecture under test
                  */
-                memcpy(src_dst_buf[i], test_buf[i], buf_sizes[i]);
+                nosimd_memcpy(src_dst_buf[i], test_buf[i], buf_sizes[i]);
                 if (fill_job(job, params, src_dst_buf[i], in_digest[i], aad,
                              buf_sizes[i], tag_size, IMB_DIR_ENCRYPT, enc_keys,
                              cipher_iv, auth_iv, i, next_iv) < 0)
@@ -1934,9 +1987,10 @@ do_test(IMB_MGR *enc_mb_mgr, const IMB_ARCH enc_arch,
 
                 /* Clear scratch registers before submitting job to prevent
                  * other functions from storing sensitive data in stack */
-                if (safe_check)
-                        clear_scratch_simd(enc_arch);
                 job = IMB_SUBMIT_JOB(enc_mb_mgr);
+
+                avx_sse_check("enc-submit", (unsigned) params->hash_alg,
+                              (unsigned) params->cipher_mode);
 
                 if (job) {
                         unsigned idx = (unsigned)((uintptr_t) job->user_data);
@@ -1972,6 +2026,10 @@ do_test(IMB_MGR *enc_mb_mgr, const IMB_ARCH enc_arch,
         /* Flush rest of the jobs, if there are outstanding jobs */
         while (num_processed_jobs != num_jobs) {
                 job = IMB_FLUSH_JOB(enc_mb_mgr);
+
+                avx_sse_check("enc-flush", (unsigned) params->hash_alg,
+                              (unsigned) params->cipher_mode);
+
                 while (job != NULL) {
                         unsigned idx = (unsigned)((uintptr_t) job->user_data);
 
@@ -2055,9 +2113,10 @@ do_test(IMB_MGR *enc_mb_mgr, const IMB_ARCH enc_arch,
 
                 /* Clear scratch registers before submitting job to prevent
                  * other functions from storing sensitive data in stack */
-                if (safe_check)
-                        clear_scratch_simd(dec_arch);
                 job = IMB_SUBMIT_JOB(dec_mb_mgr);
+
+                avx_sse_check("dec-submit", (unsigned) params->hash_alg,
+                              (unsigned) params->cipher_mode);
 
                 if (job != NULL) {
                         unsigned idx = (unsigned)((uintptr_t) job->user_data);
@@ -2084,6 +2143,10 @@ do_test(IMB_MGR *enc_mb_mgr, const IMB_ARCH enc_arch,
         /* Flush rest of the jobs, if there are outstanding jobs */
         while (num_processed_jobs != num_jobs) {
                 job = IMB_FLUSH_JOB(dec_mb_mgr);
+
+                avx_sse_check("dec-flush", (unsigned) params->hash_alg,
+                              (unsigned) params->cipher_mode);
+
                 while (job != NULL) {
                         unsigned idx = (unsigned)((uintptr_t) job->user_data);
 
@@ -2196,30 +2259,26 @@ exit:
         return ret;
 }
 
-/* Runs test for each buffer size */
 static void
-process_variant(IMB_MGR *enc_mgr, const IMB_ARCH enc_arch,
-                IMB_MGR *dec_mgr, const IMB_ARCH dec_arch,
-                struct params_s *params, struct data *variant_data,
-                const unsigned int safe_check)
+test_single(IMB_MGR *enc_mgr, const IMB_ARCH enc_arch,
+            IMB_MGR *dec_mgr, const IMB_ARCH dec_arch,
+            struct params_s *params, struct data *variant_data,
+            const uint32_t buf_size,
+            const unsigned int safe_check)
 {
-#ifdef PIN_BASED_CEC
-        const uint32_t sizes = job_sizes[RANGE_MAX];
-#else
-        const uint32_t sizes = params->num_sizes;
-#endif
-        uint32_t sz;
+        unsigned int i;
+        unsigned int num_tag_sizes = 0;
+        uint8_t tag_sizes[NUM_TAG_SIZES];
         uint64_t min_aad_sz = 0;
         uint64_t max_aad_sz, aad_sz;
-        unsigned int i, j;
 
-        if (verbose) {
-                printf("[INFO] ");
-                print_algo_info(params);
+        if (params->hash_alg >= IMB_AUTH_NUM) {
+                if (verbose) {
+                        fprintf(stderr, "Invalid hash alg\n");
+                        printf("FAIL\n");
+                }
+                exit(EXIT_FAILURE);
         }
-
-        /* Reset the variant data */
-        clear_data(variant_data);
 
         if (params->cipher_mode == IMB_CIPHER_GCM)
                 max_aad_sz = MAX_GCM_AAD_SIZE;
@@ -2228,13 +2287,28 @@ process_variant(IMB_MGR *enc_mgr, const IMB_ARCH enc_arch,
         else
                 max_aad_sz = 0;
 
-        for (sz = 0; sz < sizes; sz++) {
-#ifdef PIN_BASED_CEC
-                const uint32_t buf_size = job_sizes[RANGE_MIN];
-#else
-                const uint32_t buf_size = job_sizes[RANGE_MIN] +
-                        (sz * job_sizes[RANGE_STEP]);
-#endif
+        /* If tag size is defined by user, only test this size */
+        if (auth_tag_size != 0) {
+                tag_sizes[0] = auth_tag_size;
+                num_tag_sizes = 1;
+        } else {
+                /* If CCM, test all tag sizes supported (4,6,8,10,12,14,16) */
+                if (params->hash_alg == IMB_AUTH_AES_CCM) {
+                        for (i = 4; i <= 16; i += 2)
+                                tag_sizes[num_tag_sizes++] = i;
+                /* If ZUC-EIA3-256, test all tag sizes supported (4,8,16) */
+                } else if (params->hash_alg == IMB_AUTH_ZUC256_EIA3_BITLEN) {
+                        for (i = 4; i <= 16; i *= 2)
+                                tag_sizes[num_tag_sizes++] = i;
+                } else {
+                        tag_sizes[0] = auth_tag_len_bytes[params->hash_alg - 1];
+                        num_tag_sizes = 1;
+                }
+        }
+
+        for (i = 0; i < num_tag_sizes; i++) {
+                variant_data->tag_size = tag_sizes[i];
+
                 for (aad_sz = min_aad_sz; aad_sz <= max_aad_sz; aad_sz++) {
                         params->aad_size = aad_sz;
                         params->buf_size = buf_size;
@@ -2272,14 +2346,22 @@ process_variant(IMB_MGR *enc_mgr, const IMB_ARCH enc_arch,
                                                  dec_arch, params,
                                                  variant_data, 1, 0, 1);
                                 if (result < 0) {
-                                        printf("=== Issue found. "
-                                               "Checking again...\n");
-                                        generate_patterns();
-                                        result = do_test(enc_mgr, enc_arch,
-                                                         dec_mgr, dec_arch,
-                                                         params, variant_data,
-                                                         1, 0, 1);
+                                        uint32_t j;
 
+                                        for (j = 0; j < safe_retries; j++) {
+                                                printf("=== Issue found. "
+                                                       "Checking again...\n");
+                                                generate_patterns();
+                                                result = do_test(enc_mgr,
+                                                                 enc_arch,
+                                                                 dec_mgr,
+                                                                 dec_arch,
+                                                                 params,
+                                                                 variant_data,
+                                                                 1, 0, 1);
+                                                if (result == 0)
+                                                        break;
+                                        }
                                         if (result < 0) {
                                                 if (verbose)
                                                         printf("FAIL\n");
@@ -2294,12 +2376,49 @@ process_variant(IMB_MGR *enc_mgr, const IMB_ARCH enc_arch,
                                     params, variant_data, 0, 0, 1) < 0)
                                 exit(EXIT_FAILURE);
                 }
+        }
+}
 
+/* Runs test for each buffer size */
+static void
+process_variant(IMB_MGR *enc_mgr, const IMB_ARCH enc_arch,
+                IMB_MGR *dec_mgr, const IMB_ARCH dec_arch,
+                struct params_s *params, struct data *variant_data,
+                const unsigned int safe_check)
+{
+#ifdef PIN_BASED_CEC
+        const uint32_t sizes = job_sizes[RANGE_MAX];
+#else
+        const uint32_t sizes = params->num_sizes;
+#endif
+        uint32_t sz;
+
+        if (verbose) {
+                printf("[INFO] ");
+                print_algo_info(params);
+        }
+
+        /* Reset the variant data */
+        clear_data(variant_data);
+
+        for (sz = 0; sz < sizes; sz++) {
+#ifdef PIN_BASED_CEC
+                const uint32_t buf_size = job_sizes[RANGE_MIN];
+#else
+                const uint32_t buf_size = job_sizes[RANGE_MIN] +
+                        (sz * job_sizes[RANGE_STEP]);
+#endif
+
+                test_single(enc_mgr, enc_arch, dec_mgr,
+                            dec_arch, params, variant_data,
+                            buf_size, safe_check);
         }
 
         /* Perform IMIX tests */
         if (imix_enabled) {
-                params->aad_size = min_aad_sz;
+                unsigned int i, j;
+
+                params->aad_size = 0;
 
                 for (i = 2; i <= max_num_jobs; i++) {
                         for (j = 0; j < IMIX_ITER; j++) {
@@ -2326,9 +2445,14 @@ run_test(const IMB_ARCH enc_arch, const IMB_ARCH dec_arch,
         IMB_MGR *enc_mgr = NULL;
         IMB_MGR *dec_mgr = NULL;
 
-        if (enc_arch == IMB_ARCH_NOAESNI)
+        if (enc_arch == IMB_ARCH_NOAESNI) {
                 enc_mgr = alloc_mb_mgr(flags | IMB_FLAG_AESNI_OFF);
-        else
+                if (imb_get_errno(enc_mgr) == IMB_ERR_NO_AESNI_EMU) {
+                        printf("AESNI Emulation is not enabled. "
+                               "Skipping NOAESNI test.\n");
+                        return;
+                }
+        } else
                 enc_mgr = alloc_mb_mgr(flags);
 
         if (enc_mgr == NULL) {
@@ -2358,9 +2482,14 @@ run_test(const IMB_ARCH enc_arch, const IMB_ARCH dec_arch,
         printf("Encrypting ");
         print_tested_arch(enc_mgr->features, enc_arch);
 
-        if (dec_arch == IMB_ARCH_NOAESNI)
+        if (dec_arch == IMB_ARCH_NOAESNI) {
                 dec_mgr = alloc_mb_mgr(flags | IMB_FLAG_AESNI_OFF);
-        else
+                if (imb_get_errno(dec_mgr) == IMB_ERR_NO_AESNI_EMU) {
+                        printf("AESNI Emulation is not enabled. "
+                               "Skipping NOAESNI test.\n");
+                        return;
+                }
+        } else
                 dec_mgr = alloc_mb_mgr(flags);
 
         if (dec_mgr == NULL) {
@@ -2399,11 +2528,12 @@ run_test(const IMB_ARCH enc_arch, const IMB_ARCH dec_arch,
                 goto exit;
         }
 
-        IMB_HASH_ALG    hash_alg;
         IMB_CIPHER_MODE c_mode;
 
         for (c_mode = IMB_CIPHER_CBC; c_mode < IMB_CIPHER_NUM;
              c_mode++) {
+                IMB_HASH_ALG hash_alg;
+
                 /* Skip IMB_CIPHER_CUSTOM */
                 if (c_mode == IMB_CIPHER_CUSTOM)
                         continue;
@@ -2439,11 +2569,6 @@ run_test(const IMB_ARCH enc_arch, const IMB_ARCH dec_arch,
                                 continue;
                         if (c_mode != IMB_CIPHER_DOCSIS_SEC_BPI &&
                             hash_alg == IMB_AUTH_DOCSIS_CRC32)
-                                continue;
-                        if (c_mode == IMB_CIPHER_GCM &&
-                            (hash_alg == IMB_AUTH_AES_GMAC_128 ||
-                             hash_alg == IMB_AUTH_AES_GMAC_192 ||
-                             hash_alg == IMB_AUTH_AES_GMAC_256))
                                 continue;
                         if ((c_mode == IMB_CIPHER_CHACHA20_POLY1305 &&
                              hash_alg != IMB_AUTH_CHACHA20_POLY1305) ||
@@ -2572,6 +2697,7 @@ static void usage(const char *app_name)
                 "--shani-off: don't use SHA extensions\n"
                 "--cipher-iv-size: size of cipher IV.\n"
                 "--auth-iv-size: size of authentication IV.\n"
+                "--tag-size: size of authentication tag\n"
                 "--job-size: size of the cipher & MAC job in bytes. "
 #ifndef PIN_BASED_CEC
                 "It can be:\n"
@@ -2584,10 +2710,12 @@ static void usage(const char *app_name)
 #endif
                 "            (-o still applies for MAC)\n"
                 "--num-jobs: maximum number of number of jobs to submit in one go "
-                "(maximum = %u)\n"
+                "(maximum = %d)\n"
                 "--safe-check: check if keys, IVs, plaintext or tags "
                 "get cleared from IMB_MGR upon job completion (off by default; "
-                "requires library compiled with SAFE_DATA)\n",
+                "requires library compiled with SAFE_DATA)\n"
+                "--avx-sse: if XGETBV is available then check for potential "
+                "AVX-SSE transition problems\n",
                 app_name, MAX_NUM_JOBS);
 }
 
@@ -2785,7 +2913,7 @@ int main(int argc, char *argv[])
                          * Disable all the other architectures
                          * and enable only the specified
                          */
-                        memset(enc_archs, 0, sizeof(enc_archs));
+                        nosimd_memset(enc_archs, 0, sizeof(enc_archs));
                         enc_archs[values->arch_type] = 1;
                         i++;
                 } else if (strcmp(argv[i], "--dec-arch") == 0) {
@@ -2800,7 +2928,7 @@ int main(int argc, char *argv[])
                          * Disable all the other architectures
                          * and enable only the specified
                          */
-                        memset(dec_archs, 0, sizeof(dec_archs));
+                        nosimd_memset(dec_archs, 0, sizeof(dec_archs));
                         dec_archs[values->arch_type] = 1;
                         i++;
                 } else if (strcmp(argv[i], "--cipher-algo") == 0) {
@@ -2851,7 +2979,7 @@ int main(int argc, char *argv[])
                                           job_sizes);
                         if (job_sizes[RANGE_MAX] > JOB_SIZE_TOP) {
                                 fprintf(stderr,
-                                       "Invalid job size %u (max %u)\n",
+                                       "Invalid job size %u (max %d)\n",
                                        (unsigned) job_sizes[RANGE_MAX],
                                        JOB_SIZE_TOP);
                                 return EXIT_FAILURE;
@@ -2862,7 +2990,7 @@ int main(int argc, char *argv[])
                                              sizeof(cipher_iv_size));
                         if (cipher_iv_size > MAX_IV_SIZE) {
                                 fprintf(stderr, "IV size cannot be "
-                                        "higher than %u\n", MAX_IV_SIZE);
+                                        "higher than %d\n", MAX_IV_SIZE);
                                 return EXIT_FAILURE;
                         }
                 } else if (strcmp(argv[i], "--auth-iv-size") == 0) {
@@ -2871,7 +2999,16 @@ int main(int argc, char *argv[])
                                              sizeof(auth_iv_size));
                         if (auth_iv_size > MAX_IV_SIZE) {
                                 fprintf(stderr, "IV size cannot be "
-                                        "higher than %u\n", MAX_IV_SIZE);
+                                        "higher than %d\n", MAX_IV_SIZE);
+                                return EXIT_FAILURE;
+                        }
+                } else if (strcmp(argv[i], "--tag-size") == 0) {
+                        i = get_next_num_arg((const char * const *)argv, i,
+                                             argc, &auth_tag_size,
+                                             sizeof(auth_tag_size));
+                        if (auth_tag_size > MAX_TAG_SIZE) {
+                                fprintf(stderr, "Tag size cannot be "
+                                        "higher than %d\n", MAX_TAG_SIZE);
                                 return EXIT_FAILURE;
                         }
                 } else if (strcmp(argv[i], "--num-jobs") == 0) {
@@ -2880,13 +3017,26 @@ int main(int argc, char *argv[])
                                              sizeof(max_num_jobs));
                         if (max_num_jobs > MAX_NUM_JOBS) {
                                 fprintf(stderr, "Number of jobs cannot be "
-                                        "higher than %u\n", MAX_NUM_JOBS);
+                                        "higher than %d\n", MAX_NUM_JOBS);
                                 return EXIT_FAILURE;
                         }
                 } else if (strcmp(argv[i], "--safe-check") == 0) {
                         safe_check = 1;
+                } else if (strcmp(argv[i], "--safe-retries") == 0) {
+                        i = get_next_num_arg((const char * const *)argv, i,
+                                             argc, &safe_retries,
+                                             sizeof(safe_retries));
+                        if (safe_retries > MAX_SAFE_RETRIES) {
+                                fprintf(stderr, "Number of retries cannot be "
+                                        "higher than %d\n", MAX_SAFE_RETRIES);
+                                return EXIT_FAILURE;
+                        }
                 } else if (strcmp(argv[i], "--imix") == 0) {
                         imix_enabled = 1;
+                } else if (strcmp(argv[i], "--avx-sse") == 0) {
+                        is_avx_sse_check_possible = avx_sse_detectability();
+                        if (!is_avx_sse_check_possible)
+                                fprintf(stderr, "XGETBV not available\n");
                 } else {
                         usage(argv[0]);
                         return EXIT_FAILURE;

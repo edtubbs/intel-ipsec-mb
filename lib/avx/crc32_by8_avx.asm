@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2020-2021, Intel Corporation
+;; Copyright (c) 2020-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -39,6 +39,7 @@
 %include "include/memcpy.asm"
 %include "include/reg_sizes.asm"
 %include "include/crc32.inc"
+%include "include/clear_regs.asm"
 
 [bits 64]
 default rel
@@ -299,6 +300,9 @@ crc32_by8_avx:
         vpextrd         eax, xmm7, 1
 
 .cleanup:
+%ifdef SAFE_DATA
+        clear_all_xmms_avx_asm
+%endif
         ret
 
 align 32

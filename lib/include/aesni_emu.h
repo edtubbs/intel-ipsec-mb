@@ -1,5 +1,5 @@
 /*******************************************************************************
-  Copyright (c) 2018-2021, Intel Corporation
+  Copyright (c) 2018-2022, Intel Corporation
 
   Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions are met:
@@ -28,6 +28,10 @@
 #ifndef _AESNI_EMU_H_
 #define _AESNI_EMU_H_
 #include <stdint.h>
+#include "include/error.h"
+
+#ifdef AESNI_EMU
+#include "include/ipsec_ooo_mgr.h"
 
 /* Interface to AESNI emulation routines */
 
@@ -131,4 +135,15 @@ IMB_DLL_LOCAL void emulate_PCLMULQDQ(union xmm_reg *src1_dst,
                                      const union xmm_reg *src2,
                                      const uint32_t imm8);
 
+#endif /* AESNI_EMU */
+static inline void
+fallback_no_aesni(IMB_MGR *state, const int reset_mgrs)
+{
+#ifdef AESNI_EMU
+                init_mb_mgr_sse_no_aesni_internal(state, reset_mgrs);
+#else
+                (void) reset_mgrs; /* Unused */
+                imb_set_errno(state, IMB_ERR_NO_AESNI_EMU);
+#endif
+}
 #endif /* _AESNI_EMU_H_ */

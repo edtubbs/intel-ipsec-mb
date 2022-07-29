@@ -1,5 +1,5 @@
 /**********************************************************************
-  Copyright(c) 2017-2021, Intel Corporation All rights reserved.
+  Copyright(c) 2017-2022, Intel Corporation All rights reserved.
 
   Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions
@@ -32,6 +32,10 @@
 #include <inttypes.h>
 #include <string.h>
 #include <errno.h>
+#ifdef LINUX
+#include <signal.h>
+#include <sys/time.h>
+#endif
 
 #ifdef _WIN32
 #include <malloc.h> /* memalign() or _aligned_malloc()/aligned_free() */
@@ -100,12 +104,16 @@ typedef cpuset_t cpu_set_t;
 
 #define BITS(x) (sizeof(x) * 8)
 #define DIM(x) (sizeof(x)/sizeof(x[0]))
+#define DIV_ROUND_UP(x, y) ((x + y - 1) / y)
 
 #define MAX_NUM_THREADS 16 /* Maximum number of threads that can be created */
 
 #define IA32_MSR_FIXED_CTR_CTRL      0x38D
 #define IA32_MSR_PERF_GLOBAL_CTR     0x38F
 #define IA32_MSR_CPU_UNHALTED_THREAD 0x30A
+
+#define DEFAULT_BURST_SIZE 32
+#define MAX_BURST_SIZE 256
 
 enum arch_type_e {
         ARCH_SSE = 0,
@@ -149,14 +157,19 @@ enum test_cipher_mode_e {
 /* This enum will be mostly translated to IMB_HASH_ALG
  * (make sure to update h_alg_names list in print_times function)  */
 enum test_hash_alg_e {
-        TEST_SHA1 = 1,
+        TEST_SHA1_HMAC = 1,
+        TEST_SHA_224_HMAC,
+        TEST_SHA_256_HMAC,
+        TEST_SHA_384_HMAC,
+        TEST_SHA_512_HMAC,
+        TEST_XCBC,
+        TEST_MD5,
+        TEST_HASH_CMAC, /* added here to be included in AES tests */
+        TEST_SHA1,
         TEST_SHA_224,
         TEST_SHA_256,
         TEST_SHA_384,
         TEST_SHA_512,
-        TEST_XCBC,
-        TEST_MD5,
-        TEST_HASH_CMAC, /* added here to be included in AES tests */
         TEST_HASH_CMAC_BITLEN,
         TEST_HASH_CMAC_256,
         TEST_NULL_HASH,
@@ -187,6 +200,7 @@ enum test_hash_alg_e {
         TEST_CRC8_WIMAX_OFDMA_HCS,
         TEST_CRC7_FP_HEADER,
         TEST_CRC6_IUUP_HEADER,
+        TEST_AUTH_GHASH,
         TEST_NUM_HASH_TESTS
 };
 
@@ -471,31 +485,31 @@ const struct str_value_mapping hash_algo_str_map[] = {
         {
                 .name = "sha1-hmac",
                 .values.job_params = {
-                        .hash_alg = TEST_SHA1
+                        .hash_alg = TEST_SHA1_HMAC
                 }
         },
         {
                 .name = "sha224-hmac",
                 .values.job_params = {
-                        .hash_alg = TEST_SHA_224
+                        .hash_alg = TEST_SHA_224_HMAC
                 }
         },
         {
                 .name = "sha256-hmac",
                 .values.job_params = {
-                        .hash_alg = TEST_SHA_256
+                        .hash_alg = TEST_SHA_256_HMAC
                 }
         },
         {
                 .name = "sha384-hmac",
                 .values.job_params = {
-                        .hash_alg = TEST_SHA_384
+                        .hash_alg = TEST_SHA_384_HMAC
                 }
         },
         {
                 .name = "sha512-hmac",
                 .values.job_params = {
-                        .hash_alg = TEST_SHA_512
+                        .hash_alg = TEST_SHA_512_HMAC
                 }
         },
         {
@@ -514,6 +528,36 @@ const struct str_value_mapping hash_algo_str_map[] = {
                 .name = "aes-cmac",
                 .values.job_params = {
                         .hash_alg = TEST_HASH_CMAC
+                }
+        },
+        {
+                .name = "sha1",
+                .values.job_params = {
+                        .hash_alg = TEST_SHA1
+                }
+        },
+        {
+                .name = "sha224",
+                .values.job_params = {
+                        .hash_alg = TEST_SHA_224
+                }
+        },
+        {
+                .name = "sha256",
+                .values.job_params = {
+                        .hash_alg = TEST_SHA_256
+                }
+        },
+        {
+                .name = "sha384",
+                .values.job_params = {
+                        .hash_alg = TEST_SHA_384
+                }
+        },
+        {
+                .name = "sha512",
+                .values.job_params = {
+                        .hash_alg = TEST_SHA_512
                 }
         },
         {
@@ -654,6 +698,12 @@ const struct str_value_mapping hash_algo_str_map[] = {
                         .hash_alg = TEST_CRC6_IUUP_HEADER,
                 }
         },
+        {
+                .name = "ghash",
+                .values.job_params = {
+                        .hash_alg = TEST_AUTH_GHASH,
+                }
+        },
 };
 
 const struct str_value_mapping aead_algo_str_map[] = {
@@ -790,11 +840,11 @@ enum cache_type_e {
 enum cache_type_e cache_type = WARM;
 
 const uint32_t auth_tag_length_bytes[] = {
-                12, /* SHA1 */
-                14, /* SHA_224 */
-                16, /* SHA_256 */
-                24, /* SHA_384 */
-                32, /* SHA_512 */
+                12, /* SHA1_HMAC */
+                14, /* SHA_224_HMAC */
+                16, /* SHA_256_HMAC */
+                24, /* SHA_384_HMAC */
+                32, /* SHA_512_HMAC */
                 12, /* AES_XCBC */
                 12, /* MD5 */
                 0,  /* NULL_HASH */
@@ -835,6 +885,7 @@ const uint32_t auth_tag_length_bytes[] = {
                 4,  /* IMB_AUTH_CRC8_WIMAX_OFDMA_HCS */
                 4,  /* IMB_AUTH_CRC7_FP_HEADER */
                 4,  /* IMB_AUTH_CRC6_IUUP_HEADER */
+                16, /* IMB_AUTH_GHASH */
 };
 uint32_t index_limit;
 uint32_t key_idxs[NUM_OFFSETS];
@@ -861,11 +912,13 @@ uint32_t *hash_size_list = NULL;
 uint64_t *xgem_hdr_list = NULL;
 uint16_t imix_list_count = 0;
 uint32_t average_job_size = 0;
+uint32_t max_job_size = 0;
 
 /* Size of IMIX list (needs to be multiple of 2) */
 #define JOB_SIZE_IMIX_LIST 1024
 
 uint32_t job_iter = 0;
+uint32_t tag_size = 0;
 uint64_t gcm_aad_size = DEFAULT_GCM_AAD_SIZE;
 uint64_t ccm_aad_size = DEFAULT_CCM_AAD_SIZE;
 uint64_t chacha_poly_aad_size = DEFAULT_CHACHA_POLY_AAD_SIZE;
@@ -879,7 +932,7 @@ struct custom_job_params custom_job_params = {
 };
 
 uint8_t archs[NUM_ARCHS] = {1, 1, 1, 1}; /* uses all function sets */
-int use_gcm_job_api = 0;
+int use_job_api = 0;
 int use_gcm_sgl_api = 0;
 int use_unhalted_cycles = 0; /* read unhalted cycles instead of tsc */
 uint64_t rd_cycles_cost = 0; /* cost of reading unhalted cycles */
@@ -899,6 +952,43 @@ static uint32_t pb_mod = 0;
 
 static int silent_progress_bar = 0;
 static int plot_output_option = 0;
+
+/* API types */
+typedef enum  {
+        TEST_API_JOB = 0,
+        TEST_API_BURST,
+        TEST_API_CIPHER_BURST,
+        TEST_API_HASH_BURST,
+        TEST_API_NUMOF
+} TEST_API;
+
+const char *str_api_list[TEST_API_NUMOF] = {"single job", "burst",
+                                            "cipher-only burst",
+                                            "hash-only burst"};
+
+static TEST_API test_api = TEST_API_JOB; /* test job API by default */
+static uint32_t burst_size = 0; /* num jobs to pass to burst API */
+static uint32_t segment_size = 0; /* segment size to test SGL (0 = no SGL) */
+
+static volatile int timebox_on = 1; /* flag to stop the test loop */
+static int use_timebox = 1;         /* time-box feature on/off flag */
+
+#ifdef LINUX
+static void timebox_callback(int sig)
+{
+        (void) sig;
+        timebox_on = 0;
+}
+#endif
+
+#ifdef _WIN32
+static void CALLBACK timebox_callback(PVOID lpParam, BOOLEAN TimerFired)
+{
+        (void) lpParam;
+        (void) TimerFired;
+        timebox_on = 0;
+}
+#endif
 
 /* Return rdtsc to core cycle scale factor */
 static double get_tsc_to_core_scale(const int turbo)
@@ -1047,7 +1137,7 @@ static int set_affinity(const int cpu)
         /* Check if selected core is valid */
         if (cpu < 0 || cpu >= num_cpus) {
                 fprintf(stderr, "Invalid CPU selected! "
-                        "Max valid CPU is %u\n", num_cpus - 1);
+                        "Max valid CPU is %d\n", num_cpus - 1);
                 return 1;
         }
 
@@ -1368,7 +1458,10 @@ translate_cipher_mode(const enum test_cipher_mode_e test_mode)
                 c_mode = IMB_CIPHER_DOCSIS_DES;
                 break;
         case TEST_GCM:
-                c_mode = IMB_CIPHER_GCM;
+                if (segment_size != 0)
+                        c_mode = IMB_CIPHER_GCM_SGL;
+                else
+                        c_mode = IMB_CIPHER_GCM;
                 break;
         case TEST_CCM:
                 c_mode = IMB_CIPHER_CCM;
@@ -1399,7 +1492,11 @@ translate_cipher_mode(const enum test_cipher_mode_e test_mode)
                 c_mode = IMB_CIPHER_CHACHA20;
                 break;
         case TEST_AEAD_CHACHA20:
-                c_mode = IMB_CIPHER_CHACHA20_POLY1305;
+                if (segment_size != 0)
+                        c_mode = IMB_CIPHER_CHACHA20_POLY1305_SGL;
+                else
+                        c_mode = IMB_CIPHER_CHACHA20_POLY1305;
+
                 break;
         case TEST_SNOW_V:
                 c_mode = IMB_CIPHER_SNOW_V;
@@ -1482,6 +1579,60 @@ set_job_fields(IMB_JOB *job, uint8_t *p_buffer, imb_uint128_t *p_keys,
                                                            p_keys);
         }
 }
+
+static inline void
+set_sgl_job_fields(IMB_JOB *job, uint8_t *p_buffer, imb_uint128_t *p_keys,
+                   const uint32_t size_idx, const uint32_t buf_index,
+                   struct IMB_SGL_IOV *sgl, struct gcm_context_data *gcm_ctx,
+                   struct chacha20_poly1305_context_data *cp_ctx)
+{
+        uint8_t *src = get_src_buffer(buf_index, p_buffer);
+        uint8_t *dst = get_dst_buffer(buf_index, p_buffer);
+        uint8_t *aad = src;
+        uint32_t buf_size;
+
+        job->src = src;
+        job->dst = dst;
+
+        /* If IMIX testing is being done, set the buffer size to cipher and hash
+         * going through the list of sizes precalculated */
+        if (imix_list_count != 0) {
+                uint32_t list_idx = size_idx & (JOB_SIZE_IMIX_LIST - 1);
+
+                job->msg_len_to_cipher_in_bytes = cipher_size_list[list_idx];
+        }
+        buf_size = (uint32_t) job->msg_len_to_cipher_in_bytes;
+        if (job->cipher_mode == IMB_CIPHER_GCM_SGL) {
+                job->u.GCM.aad = aad;
+                job->u.GCM.ctx = gcm_ctx;
+        } else {
+                job->u.CHACHA20_POLY1305.aad = aad;
+                job->u.CHACHA20_POLY1305.ctx = cp_ctx;
+        }
+        job->enc_keys = job->dec_keys =
+                (const uint32_t *) get_key_pointer(buf_index,
+                                   p_keys);
+        job->sgl_state = IMB_SGL_ALL;
+
+        const uint32_t num_segs = buf_size / segment_size;
+        const uint32_t final_seg_sz = buf_size % segment_size;
+        unsigned i;
+
+        job->num_sgl_io_segs = num_segs;
+
+        for (i = 0; i < num_segs; i++) {
+                sgl[i].in = &src[i * segment_size];
+                sgl[i].out = &dst[i * segment_size];
+                sgl[i].len = segment_size;
+        }
+        if (final_seg_sz != 0) {
+                sgl[i].in = &src[num_segs * segment_size];
+                sgl[i].out = &dst[num_segs * segment_size];
+                sgl[i].len = final_seg_sz;
+                (job->num_sgl_io_segs)++;
+        }
+        job->sgl_io_segs = sgl;
+};
 
 static void
 set_size_lists(uint32_t *cipher_size_list, uint32_t *hash_size_list,
@@ -1594,12 +1745,30 @@ do_test(IMB_MGR *mb_mgr, struct params_s *params,
         uint32_t aux;
         uint8_t gcm_key[32];
         uint8_t next_iv[IMB_AES_BLOCK_SIZE];
+        IMB_JOB jobs[MAX_BURST_SIZE];
+        struct gcm_context_data gcm_ctx[MAX_BURST_SIZE];
+        struct chacha20_poly1305_context_data cp_ctx[MAX_BURST_SIZE];
+        struct IMB_SGL_IOV *sgl[MAX_BURST_SIZE] = {NULL};
+        uint32_t max_num_segs = 1;
 
         memset(&job_template, 0, sizeof(IMB_JOB));
 
         /* Set cipher and hash length arrays to be used in each job,
            and set the XGEM header in case PON is used. */
         set_size_lists(cipher_size_list, hash_size_list, xgem_hdr_list, params);
+
+        if (segment_size != 0)
+                max_num_segs = DIV_ROUND_UP(job_sizes[RANGE_MAX],
+                                            segment_size);
+
+        for (i = 0; i < MAX_BURST_SIZE; i++) {
+                sgl[i] = malloc(sizeof(struct IMB_SGL_IOV) *
+                                max_num_segs);
+                if (sgl[i] == NULL) {
+                        fprintf(stderr, "malloc() failed\n");
+                        goto exit;
+                }
+        }
 
         /*
          * If single size is used, set the cipher and hash lengths in the
@@ -1617,6 +1786,21 @@ do_test(IMB_MGR *mb_mgr, struct params_s *params,
         job_template.auth_tag_output = (uint8_t *) digest;
 
         switch (params->hash_alg) {
+        case TEST_SHA1:
+                job_template.hash_alg = IMB_AUTH_SHA_1;
+                break;
+        case TEST_SHA_224:
+                job_template.hash_alg = IMB_AUTH_SHA_224;
+                break;
+        case TEST_SHA_256:
+                job_template.hash_alg = IMB_AUTH_SHA_256;
+                break;
+        case TEST_SHA_384:
+                job_template.hash_alg = IMB_AUTH_SHA_384;
+                break;
+        case TEST_SHA_512:
+                job_template.hash_alg = IMB_AUTH_SHA_512;
+                break;
         case TEST_XCBC:
                 job_template.u.XCBC._k1_expanded = k1_expanded;
                 job_template.u.XCBC._k2 = k2;
@@ -1627,7 +1811,10 @@ do_test(IMB_MGR *mb_mgr, struct params_s *params,
                 job_template.hash_alg = IMB_AUTH_AES_CCM;
                 break;
         case TEST_HASH_GCM:
-                job_template.hash_alg = IMB_AUTH_AES_GMAC;
+                if (segment_size != 0)
+                        job_template.hash_alg = IMB_AUTH_GCM_SGL;
+                else
+                        job_template.hash_alg = IMB_AUTH_AES_GMAC;
                 break;
         case TEST_DOCSIS_CRC32:
                 job_template.hash_alg = IMB_AUTH_DOCSIS_CRC32;
@@ -1658,7 +1845,10 @@ do_test(IMB_MGR *mb_mgr, struct params_s *params,
                 job_template.hash_alg = IMB_AUTH_POLY1305;
                 break;
         case TEST_AEAD_POLY1305:
-                job_template.hash_alg = IMB_AUTH_CHACHA20_POLY1305;
+                if (segment_size != 0)
+                        job_template.hash_alg = IMB_AUTH_CHACHA20_POLY1305_SGL;
+                else
+                        job_template.hash_alg = IMB_AUTH_CHACHA20_POLY1305;
                 break;
         case TEST_PON_CRC_BIP:
                 job_template.hash_alg = IMB_AUTH_PON_CRC_BIP;
@@ -1703,6 +1893,12 @@ do_test(IMB_MGR *mb_mgr, struct params_s *params,
                 job_template.u.GMAC._key = &gdata_key;
                 job_template.u.GMAC._iv = (uint8_t *) &auth_iv;
                 job_template.u.GMAC.iv_len_in_bytes = 12;
+                break;
+        case TEST_AUTH_GHASH:
+                job_template.hash_alg = IMB_AUTH_GHASH;
+                IMB_GHASH_PRE(mb_mgr, gcm_key, &gdata_key);
+                job_template.u.GHASH._key = &gdata_key;
+                job_template.u.GHASH._init_tag = (uint8_t *) &auth_iv;
                 break;
         case TEST_AUTH_SNOW_V_AEAD:
                 job_template.hash_alg = IMB_AUTH_SNOW_V_AEAD;
@@ -1752,8 +1948,11 @@ do_test(IMB_MGR *mb_mgr, struct params_s *params,
                 job_template.hash_alg = (IMB_HASH_ALG) params->hash_alg;
                 break;
         }
-        job_template.auth_tag_output_len_in_bytes =
-                (uint64_t) auth_tag_length_bytes[job_template.hash_alg - 1];
+        if (tag_size == 0)
+                job_template.auth_tag_output_len_in_bytes =
+                    (uint64_t) auth_tag_length_bytes[job_template.hash_alg - 1];
+        else
+                job_template.auth_tag_output_len_in_bytes = tag_size;
 
         job_template.cipher_direction = params->cipher_dir;
 
@@ -1777,7 +1976,8 @@ do_test(IMB_MGR *mb_mgr, struct params_s *params,
         /* Translating enum to the API's one */
         job_template.cipher_mode = translate_cipher_mode(params->cipher_mode);
         job_template.key_len_in_bytes = params->aes_key_size;
-        if (job_template.cipher_mode == IMB_CIPHER_GCM) {
+        if (job_template.cipher_mode == IMB_CIPHER_GCM ||
+            job_template.cipher_mode == IMB_CIPHER_GCM_SGL) {
                 switch (params->aes_key_size) {
                 case IMB_KEY_128_BYTES:
                         IMB_AES128_GCM_PRE(mb_mgr, gcm_key, &gdata_key);
@@ -1836,7 +2036,8 @@ do_test(IMB_MGR *mb_mgr, struct params_s *params,
                 job_template.iv_len_in_bytes = 0;
         else if (job_template.cipher_mode == IMB_CIPHER_CHACHA20)
                 job_template.iv_len_in_bytes = 12;
-        else if (job_template.cipher_mode == IMB_CIPHER_CHACHA20_POLY1305) {
+        else if (job_template.cipher_mode == IMB_CIPHER_CHACHA20_POLY1305 ||
+                 job_template.cipher_mode == IMB_CIPHER_CHACHA20_POLY1305_SGL) {
                 job_template.hash_start_src_offset_in_bytes = 0;
                 job_template.cipher_start_src_offset_in_bytes = 0;
                 job_template.enc_keys = k1_expanded;
@@ -1854,6 +2055,49 @@ do_test(IMB_MGR *mb_mgr, struct params_s *params,
                         params->aad_size;
         }
 
+#define TIMEOUT_MS 100 /*< max time for one packet size to be tested for */
+
+        uint32_t jobs_done = 0; /*< to track how many jobs done over time */
+#ifdef _WIN32
+        HANDLE hTimebox = NULL;
+        HANDLE hTimeboxQueue = NULL;
+#endif
+
+        if (use_timebox) {
+#ifdef LINUX
+                struct itimerval it_next;
+
+                /* set up one shot timer */
+                it_next.it_interval.tv_sec = 0;
+                it_next.it_interval.tv_usec = 0;
+                it_next.it_value.tv_sec = TIMEOUT_MS / 1000;
+                it_next.it_value.tv_usec = (TIMEOUT_MS % 1000) * 1000;
+                if (setitimer(ITIMER_REAL, &it_next, NULL)) {
+                        perror("setitimer(one-shot)");
+                        goto exit;
+                }
+#else /* _WIN32 */
+                /* create the timer queue */
+                hTimeboxQueue = CreateTimerQueue();
+                if (NULL == hTimeboxQueue) {
+                        fprintf(stderr, "CreateTimerQueue() error %u\n",
+                                (unsigned) GetLastError());
+                        goto exit;
+                }
+
+                /* set a timer to call the timebox */
+                if (!CreateTimerQueueTimer(&hTimebox, hTimeboxQueue,
+                                           (WAITORTIMERCALLBACK)
+                                           timebox_callback,
+                                           NULL, TIMEOUT_MS, 0, 0)) {
+                        fprintf(stderr, "CreateTimerQueueTimer() error %u\n",
+                                (unsigned) GetLastError());
+                        goto exit;
+                }
+#endif
+                timebox_on = 1;
+        }
+
 #ifndef _WIN32
         if (use_unhalted_cycles)
                 time = read_cycles(params->core);
@@ -1861,43 +2105,231 @@ do_test(IMB_MGR *mb_mgr, struct params_s *params,
 #endif
                 time = __rdtscp(&aux);
 
-        for (i = 0; i < num_iter; i++) {
-                job = IMB_GET_NEXT_JOB(mb_mgr);
-                *job = job_template;
+        /* test burst api */
+        if (test_api == TEST_API_BURST) {
+                uint32_t num_jobs = num_iter;
 
-                set_job_fields(job, p_buffer, p_keys, i, index);
+                while (num_jobs && timebox_on) {
+                        uint32_t n_jobs =
+                                (num_jobs / burst_size) ? burst_size : num_jobs;
 
-                index = get_next_index(index);
+                        /* set all job params */
+                        for (i = 0; i < n_jobs; i++) {
+                                job = &jobs[i];
+                                *job = job_template;
+
+                                if (segment_size != 0)
+                                        set_sgl_job_fields(job, p_buffer,
+                                                           p_keys, i,
+                                                           index, sgl[i],
+                                                           &gcm_ctx[i],
+                                                           &cp_ctx[i]);
+                                else
+                                        set_job_fields(job, p_buffer, p_keys,
+                                                       i, index);
+
+                                index = get_next_index(index);
+
+                        }
+                        /* submit burst */
 #ifdef DEBUG
-                job = IMB_SUBMIT_JOB(mb_mgr);
+                        const uint32_t completed_jobs =
+                                IMB_SUBMIT_BURST(mb_mgr, jobs, n_jobs);
+
+                        if (completed_jobs != n_jobs) {
+                                const int err = imb_get_errno(mb_mgr);
+
+                                if (err != 0) {
+                                        printf("submit_burst error %d : '%s'\n",
+                                               err, imb_get_strerror(err));
+                                }
+                        }
 #else
-                job = IMB_SUBMIT_JOB_NOCHECK(mb_mgr);
+                        IMB_SUBMIT_BURST_NOCHECK(mb_mgr, jobs, n_jobs);
 #endif
-                while (job) {
+                        num_jobs -= n_jobs;
+                }
+                jobs_done = num_iter - num_jobs;
+
+                /* test cipher-only burst api */
+        } else if (test_api == TEST_API_CIPHER_BURST) {
+                IMB_JOB *jt = &job_template;
+                uint32_t num_jobs = num_iter;
+                uint32_t list_idx;
+
+                while (num_jobs && timebox_on) {
+                        uint32_t n_jobs =
+                                (num_jobs / burst_size) ? burst_size : num_jobs;
+
+                        /* set all job params */
+                        for (i = 0; i < n_jobs; i++) {
+                                job = &jobs[i];
+
+                                /* If IMIX testing is being done, set the buffer
+                                 * size to cipher going through the
+                                 * list of sizes precalculated */
+                                if (imix_list_count != 0) {
+                                        list_idx = i & (JOB_SIZE_IMIX_LIST - 1);
+                                        job->msg_len_to_cipher_in_bytes =
+                                                cipher_size_list[list_idx];
+                                } else
+                                        job->msg_len_to_cipher_in_bytes =
+                                                jt->msg_len_to_cipher_in_bytes;
+
+                                job->src = get_src_buffer(index, p_buffer);
+                                job->dst = get_dst_buffer(index, p_buffer);
+                                job->enc_keys = job->dec_keys =
+                                        (const uint32_t *)
+                                        get_key_pointer(index, p_keys);
+                                job->cipher_start_src_offset_in_bytes =
+                                        jt->cipher_start_src_offset_in_bytes;
+                                job->iv = jt->iv;
+                                job->iv_len_in_bytes = jt->iv_len_in_bytes;
+
+                                index = get_next_index(index);
+                        }
+                        /* submit cipher-only burst */
+#ifdef DEBUG
+                        const uint32_t completed_jobs =
+                                IMB_SUBMIT_CIPHER_BURST(mb_mgr, jobs, n_jobs,
+                                                        jt->cipher_mode,
+                                                        jt->cipher_direction,
+                                                        jt->key_len_in_bytes);
+
+                        if (completed_jobs != n_jobs) {
+                                const int err = imb_get_errno(mb_mgr);
+
+                                if (err != 0) {
+                                        printf("submit_cipher_burst error "
+                                               "%d : '%s'\n", err,
+                                               imb_get_strerror(err));
+                                }
+                        }
+#else
+                        IMB_SUBMIT_CIPHER_BURST_NOCHECK(mb_mgr, jobs, n_jobs,
+                                                        jt->cipher_mode,
+                                                        jt->cipher_direction,
+                                                        jt->key_len_in_bytes);
+#endif
+                        num_jobs -= n_jobs;
+                }
+                jobs_done = num_iter - num_jobs;
+
+                /* test hash-only burst api */
+        } else if (test_api == TEST_API_HASH_BURST) {
+                IMB_JOB *jt = &job_template;
+                uint32_t num_jobs = num_iter;
+                uint32_t list_idx;
+
+                while (num_jobs && timebox_on) {
+                        uint32_t n_jobs =
+                                (num_jobs / burst_size) ? burst_size : num_jobs;
+
+                        /* set all job params */
+                        for (i = 0; i < n_jobs; i++) {
+                                job = &jobs[i];
+
+                                /* If IMIX testing is being done, set the buffer
+                                 * size to cipher going through the
+                                 * list of sizes precalculated */
+                                if (imix_list_count != 0) {
+                                        list_idx = i & (JOB_SIZE_IMIX_LIST - 1);
+                                        job->msg_len_to_hash_in_bytes =
+                                                hash_size_list[list_idx];
+                                } else
+                                        job->msg_len_to_hash_in_bytes =
+                                                jt->msg_len_to_hash_in_bytes;
+
+                                job->src = get_src_buffer(index, p_buffer);
+                                job->hash_start_src_offset_in_bytes =
+                                        jt->hash_start_src_offset_in_bytes;
+                                job->auth_tag_output_len_in_bytes =
+                                        jt->auth_tag_output_len_in_bytes;
+                                job->u.HMAC._hashed_auth_key_xor_ipad =
+                                        jt->u.HMAC._hashed_auth_key_xor_ipad;
+                                job->u.HMAC._hashed_auth_key_xor_opad =
+                                        jt->u.HMAC._hashed_auth_key_xor_opad;
+                                job->auth_tag_output = jt->auth_tag_output;
+
+                                index = get_next_index(index);
+                        }
+                        /* submit hash-only burst */
+#ifdef DEBUG
+                        const uint32_t completed_jobs =
+                                IMB_SUBMIT_HASH_BURST(mb_mgr, jobs, n_jobs,
+                                                      jt->hash_alg);
+
+                        if (completed_jobs != n_jobs) {
+                                const int err = imb_get_errno(mb_mgr);
+
+                                if (err != 0) {
+                                        printf("submit_hash_burst error "
+                                               "%d : '%s'\n", err,
+                                               imb_get_strerror(err));
+                                }
+                        }
+#else
+                        IMB_SUBMIT_HASH_BURST_NOCHECK(mb_mgr, jobs, n_jobs,
+                                                        jt->hash_alg);
+#endif
+                        num_jobs -= n_jobs;
+                }
+                jobs_done = num_iter - num_jobs;
+
+        } else { /* test job api */
+                for (i = 0; (i < num_iter) && timebox_on; i++) {
+                        job = IMB_GET_NEXT_JOB(mb_mgr);
+                        *job = job_template;
+
+                        if (segment_size != 0)
+                                set_sgl_job_fields(job, p_buffer, p_keys,
+                                                   i, index,
+                                                   sgl[0], &gcm_ctx[0],
+                                                   &cp_ctx[0]);
+                        else
+                                set_job_fields(job, p_buffer, p_keys, i, index);
+
+                        index = get_next_index(index);
+#ifdef DEBUG
+                        job = IMB_SUBMIT_JOB(mb_mgr);
+#else
+                        job = IMB_SUBMIT_JOB_NOCHECK(mb_mgr);
+#endif
+                        while (job) {
+#ifdef DEBUG
+                                if (job->status != IMB_STATUS_COMPLETED) {
+                                        fprintf(stderr,
+                                                "failed job, status:%d\n",
+                                                job->status);
+                                        goto exit;
+                                }
+#endif
+                                job = IMB_GET_COMPLETED_JOB(mb_mgr);
+                        }
+                }
+                jobs_done = i;
+
+                while ((job = IMB_FLUSH_JOB(mb_mgr))) {
 #ifdef DEBUG
                         if (job->status != IMB_STATUS_COMPLETED) {
-                                fprintf(stderr, "failed job, status:%d\n",
-                                        job->status);
-                                return 1;
+                                const int errc = imb_get_errno(mb_mgr);
+
+                                fprintf(stderr,
+                                        "failed job, status:%d, "
+                                        "error code:%d, %s\n", job->status,
+                                        errc, imb_get_strerror(errc));
+                                goto exit;
                         }
-#endif
-                        job = IMB_GET_COMPLETED_JOB(mb_mgr);
-                }
-        }
-
-        while ((job = IMB_FLUSH_JOB(mb_mgr))) {
-#ifdef DEBUG
-                if (job->status != IMB_STATUS_COMPLETED) {
-                        const int errc = imb_get_errno(mb_mgr);
-
-                        fprintf(stderr,
-                                "failed job, status:%d, error code:%d, %s\n",
-                                job->status, errc, imb_get_strerror(errc));
-                        return 1;
-                }
 #else
-                (void)job;
+                        (void)job;
 #endif
+                }
+
+        } /* if test_api */
+
+        for (i = 0; i < MAX_BURST_SIZE; i++) {
+                free(sgl[i]);
+                sgl[i] = NULL;
         }
 
 #ifndef _WIN32
@@ -1907,10 +2339,41 @@ do_test(IMB_MGR *mb_mgr, struct params_s *params,
 #endif
                 time = __rdtscp(&aux) - time;
 
+        if (use_timebox) {
+#ifdef LINUX
+                /* disarm the timer */
+                struct itimerval it_disarm;
+
+                memset(&it_disarm, 0, sizeof(it_disarm));
+
+                if (setitimer(ITIMER_REAL, &it_disarm, NULL)) {
+                        perror("setitimer(disarm)");
+                        goto exit;
+                }
+#else /* _WIN32 */
+                /* delete all timeboxes in the timer queue */
+                if (!DeleteTimerQueue(hTimeboxQueue))
+                        fprintf(stderr, "DeleteTimerQueue() error %u\n",
+                                (unsigned) GetLastError());
+#endif
+
+                /* calculate return value */
+                if (jobs_done == 0)
+                        return 0;
+
+                return time / jobs_done;
+        }
+
         if (!num_iter)
                 return time;
 
         return time / num_iter;
+
+exit:
+        for (i = 0; i < MAX_BURST_SIZE; i++)
+                free(sgl[i]);
+
+        exit(EXIT_FAILURE);
 }
 
 static void
@@ -1927,17 +2390,48 @@ run_gcm_sgl(aes_gcm_init_t init, aes_gcm_enc_dec_update_t update,
         uint8_t auth_tag[12];
         DECLARE_ALIGNED(uint8_t iv[16], 16);
 
-        for (i = 0; i < num_iter; i++) {
-                uint8_t *pb = get_dst_buffer(index, p_buffer);
+        /* SGL */
+        if (segment_size != 0) {
+                for (i = 0; i < num_iter; i++) {
+                        uint8_t *pb = get_dst_buffer(index, p_buffer);
 
-                if (imix_list_count != 0)
-                        buf_size = get_next_size(i);
+                        if (imix_list_count != 0)
+                                buf_size = get_next_size(i);
 
-                init(gdata_key, gdata_ctx, iv, aad, aad_size);
-                update(gdata_key, gdata_ctx, pb, pb, buf_size);
-                finalize(gdata_key, gdata_ctx, auth_tag, sizeof(auth_tag));
+                        const uint32_t num_segs = buf_size / segment_size;
+                        const uint32_t final_seg_sz = buf_size % segment_size;
+                        uint32_t j;
 
-                index = get_next_index(index);
+                        init(gdata_key, gdata_ctx, iv, aad, aad_size);
+                        for (j = 0; j < num_segs; j++)
+                                update(gdata_key, gdata_ctx,
+                                       &pb[j*segment_size],
+                                       &pb[j*segment_size],
+                                       segment_size);
+                        if (final_seg_sz != 0)
+                                update(gdata_key, gdata_ctx,
+                                       &pb[j*segment_size],
+                                       &pb[j*segment_size],
+                                       final_seg_sz);
+                        finalize(gdata_key, gdata_ctx, auth_tag,
+                                 sizeof(auth_tag));
+
+                        index = get_next_index(index);
+                }
+        } else {
+                for (i = 0; i < num_iter; i++) {
+                        uint8_t *pb = get_dst_buffer(index, p_buffer);
+
+                        if (imix_list_count != 0)
+                                buf_size = get_next_size(i);
+
+                        init(gdata_key, gdata_ctx, iv, aad, aad_size);
+                        update(gdata_key, gdata_ctx, pb, pb, buf_size);
+                        finalize(gdata_key, gdata_ctx, auth_tag,
+                                 sizeof(auth_tag));
+
+                        index = get_next_index(index);
+                }
         }
 }
 
@@ -1980,6 +2474,10 @@ do_test_gcm(struct params_s *params,
         uint8_t *aad = NULL;
         uint64_t time = 0;
         uint32_t aux;
+
+        /* Force SGL API if segment size is not 0 */
+        if (segment_size != 0)
+                use_gcm_sgl_api = 1;
 
         key = (uint8_t *) malloc(sizeof(uint8_t) * params->aes_key_size);
         if (!key) {
@@ -2143,6 +2641,172 @@ do_test_gcm(struct params_s *params,
         return time / num_iter;
 }
 
+/* Performs test using CHACHA20-POLY1305 direct API */
+static uint64_t
+do_test_chacha_poly(struct params_s *params,
+                    const uint32_t num_iter, IMB_MGR *mb_mgr,
+                    uint8_t *p_buffer, imb_uint128_t *p_keys)
+{
+        uint8_t key[32];
+        uint8_t auth_tag[16];
+        DECLARE_ALIGNED(uint8_t iv[16], 16);
+        uint8_t *aad = NULL;
+        uint64_t time = 0;
+        uint32_t aux;
+        struct chacha20_poly1305_context_data chacha_ctx;
+        static uint32_t index = 0;
+        uint32_t num_segs;
+        uint32_t final_seg_sz;
+        unsigned i, j;
+
+        aad = (uint8_t *) malloc(sizeof(uint8_t) * params->aad_size);
+        if (!aad) {
+                fprintf(stderr, "Could not malloc AAD\n");
+                free_mem(&p_buffer, &p_keys);
+                exit(EXIT_FAILURE);
+        }
+
+        if (segment_size != 0) {
+                num_segs = params->size_aes / segment_size;
+                final_seg_sz = params->size_aes % segment_size;
+        } else {
+                num_segs = 0;
+                final_seg_sz = params->size_aes;
+        }
+
+#ifndef _WIN32
+        if (use_unhalted_cycles)
+                time = read_cycles(params->core);
+        else
+#endif
+                time = __rdtscp(&aux);
+
+        for (i = 0; i < num_iter; i++) {
+                uint8_t *pb = get_dst_buffer(index, p_buffer);
+
+                if (imix_list_count != 0) {
+                        uint32_t buf_size = get_next_size(i);
+
+                        if (segment_size != 0) {
+                                num_segs = buf_size / segment_size;
+                                final_seg_sz = buf_size % segment_size;
+                        } else {
+                                num_segs = 0;
+                                final_seg_sz = buf_size;
+                        }
+                }
+
+                IMB_CHACHA20_POLY1305_INIT(mb_mgr, key, &chacha_ctx, iv,
+                                           aad, params->aad_size);
+
+                if (params->cipher_dir == IMB_DIR_ENCRYPT) {
+                        for (j = 0; j < num_segs; j++)
+                                IMB_CHACHA20_POLY1305_ENC_UPDATE(mb_mgr, key,
+                                                         &chacha_ctx,
+                                                         &pb[j*segment_size],
+                                                         &pb[j*segment_size],
+                                                         segment_size);
+                        if (final_seg_sz != 0)
+                                IMB_CHACHA20_POLY1305_ENC_UPDATE(mb_mgr, key,
+                                                         &chacha_ctx,
+                                                         &pb[j*segment_size],
+                                                         &pb[j*segment_size],
+                                                         final_seg_sz);
+                        IMB_CHACHA20_POLY1305_ENC_FINALIZE(mb_mgr,
+                                                           &chacha_ctx,
+                                                           auth_tag,
+                                                           sizeof(auth_tag));
+                } else { /* IMB_DIR_DECRYPT */
+                        for (j = 0; j < num_segs; j++)
+                                IMB_CHACHA20_POLY1305_ENC_UPDATE(mb_mgr, key,
+                                                         &chacha_ctx,
+                                                         &pb[j*segment_size],
+                                                         &pb[j*segment_size],
+                                                         segment_size);
+                        if (final_seg_sz != 0)
+                                IMB_CHACHA20_POLY1305_DEC_UPDATE(mb_mgr, key,
+                                                         &chacha_ctx,
+                                                         &pb[j*segment_size],
+                                                         &pb[j*segment_size],
+                                                         final_seg_sz);
+                        IMB_CHACHA20_POLY1305_DEC_FINALIZE(mb_mgr,
+                                                           &chacha_ctx,
+                                                           auth_tag,
+                                                           sizeof(auth_tag));
+                }
+                index = get_next_index(index);
+        }
+#ifndef _WIN32
+        if (use_unhalted_cycles)
+                time = (read_cycles(params->core) -
+                        rd_cycles_cost) - time;
+        else
+#endif
+                time = __rdtscp(&aux) - time;
+
+        free(aad);
+
+        if (!num_iter)
+                return time;
+
+        return time / num_iter;
+}
+
+/* Performs test using GCM */
+static uint64_t
+do_test_ghash(struct params_s *params,
+              const uint32_t num_iter, IMB_MGR *mb_mgr,
+              uint8_t *p_buffer, imb_uint128_t *p_keys)
+{
+        static DECLARE_ALIGNED(struct gcm_key_data gdata_key, 512);
+        uint64_t time = 0;
+        uint32_t aux;
+        uint32_t i, index = 0;
+        uint8_t auth_tag[16];
+
+        IMB_GHASH_PRE(mb_mgr, p_keys, &gdata_key);
+
+#ifndef _WIN32
+        if (use_unhalted_cycles)
+                time = read_cycles(params->core);
+        else
+#endif
+                time = __rdtscp(&aux);
+
+        if (imix_list_count != 0) {
+                for (i = 0; i < num_iter; i++) {
+                        uint8_t *pb = get_dst_buffer(index, p_buffer);
+                        const uint32_t buf_size = get_next_size(i);
+
+                        IMB_GHASH(mb_mgr, &gdata_key, pb, buf_size,
+                                  auth_tag, sizeof(auth_tag));
+                        index = get_next_index(index);
+                }
+        } else {
+                for (i = 0; i < num_iter; i++) {
+                        uint8_t *pb = get_dst_buffer(index, p_buffer);
+                        const uint32_t buf_size = params->size_aes;
+
+                        IMB_GHASH(mb_mgr, &gdata_key, pb, buf_size,
+                                  auth_tag, sizeof(auth_tag));
+                        index = get_next_index(index);
+                }
+        }
+
+#ifndef _WIN32
+        if (use_unhalted_cycles)
+                time = (read_cycles(params->core) -
+                        rd_cycles_cost) - time;
+        else
+#endif
+                time = __rdtscp(&aux) - time;
+
+        if (!num_iter)
+                return time;
+
+        return time / num_iter;
+}
+
 /* Computes mean of set of times after dropping bottom and top quarters */
 static uint64_t
 mean_median(uint64_t *array, uint32_t size,
@@ -2232,13 +2896,31 @@ process_variant(IMB_MGR *mgr, const enum arch_type_e arch,
                         num_iter = iter_scale;
 
                 params->size_aes = size_aes;
-                if (params->cipher_mode == TEST_GCM && (!use_gcm_job_api)) {
+                if (params->cipher_mode == TEST_GCM && (!use_job_api)) {
                         if (job_iter == 0)
                                 *times = do_test_gcm(params, 2 * num_iter, mgr,
                                                      p_buffer, p_keys);
                         else
                                 *times = do_test_gcm(params, job_iter, mgr,
                                                      p_buffer, p_keys);
+                } else if (params->cipher_mode == TEST_AEAD_CHACHA20 &&
+                           (!use_job_api)) {
+                        if (job_iter == 0)
+                                *times = do_test_chacha_poly(params,
+                                                     2 * num_iter, mgr,
+                                                     p_buffer, p_keys);
+                        else
+                                *times = do_test_chacha_poly(params,
+                                                     job_iter, mgr,
+                                                     p_buffer, p_keys);
+                } else if (params->hash_alg == TEST_AUTH_GHASH &&
+                           (!use_job_api)) {
+                        if (job_iter == 0)
+                                *times = do_test_ghash(params, 2 * num_iter,
+                                                       mgr, p_buffer, p_keys);
+                        else
+                                *times = do_test_ghash(params, job_iter, mgr,
+                                                       p_buffer, p_keys);
                 } else {
                         if (job_iter == 0)
                                 *times = do_test(mgr, params, num_iter,
@@ -2281,16 +2963,21 @@ print_times(struct variant_s *variant_list, struct params_s *params,
                         "ENCRYPT", "DECRYPT"
                 };
                 const char *h_alg_names[TEST_NUM_HASH_TESTS - 1] = {
-                        "SHA1", "SHA_224", "SHA_256", "SHA_384", "SHA_512",
-                        "XCBC", "MD5", "CMAC", "CMAC_BITLEN", "CMAC_256",
+                        "SHA1_HMAC", "SHA_224_HMAC", "SHA_256_HMAC",
+                        "SHA_384_HMAC", "SHA_512_HMAC", "XCBC",
+                        "MD5", "CMAC", "SHA1", "SHA_224", "SHA_256",
+                        "SHA_384", "SHA_512", "CMAC_BITLEN", "CMAC_256",
                         "NULL_HASH", "CRC32", "GCM", "CUSTOM", "CCM",
                         "BIP-CRC32", "ZUC_EIA3_BITLEN", "SNOW3G_UIA2_BITLEN",
                         "KASUMI_UIA1", "GMAC-128", "GMAC-192", "GMAC-256",
                         "POLY1305", "POLY1305_AEAD", "ZUC256_EIA3",
-                        "SNOW_V_AEAD"
+                        "SNOW_V_AEAD", "CRC32_ETH_FCS", "CRC32_SCTP",
+                        "CRC32_WIMAX_DATA", "CRC24_LTE_A", "CR24_LTE_B",
+                        "CR16_X25", "CRC16_FP_DATA", "CRC11_FP_HEADER",
+                        "CRC10_IUUP_DATA", "CRC8_WIMAX_HCS", "CRC7_FP_HEADER",
+                        "CRC6_IUUP_HEADER", "GHASH"
                 };
                 struct params_s par;
-                uint8_t	c_mode, c_dir, h_alg;
 
                 printf("ARCH");
                 for (col = 0; col < total_variants; col++)
@@ -2299,21 +2986,27 @@ print_times(struct variant_s *variant_list, struct params_s *params,
                 printf("CIPHER");
                 for (col = 0; col < total_variants; col++) {
                         par = variant_list[col].params;
-                        c_mode = par.cipher_mode - TEST_CBC;
+
+                        const uint8_t c_mode = par.cipher_mode - TEST_CBC;
+
                         printf("\t%s", c_mode_names[c_mode]);
                 }
                 printf("\n");
                 printf("DIR");
                 for (col = 0; col < total_variants; col++) {
                         par = variant_list[col].params;
-                        c_dir = par.cipher_dir - IMB_DIR_ENCRYPT;
+
+                        const uint8_t c_dir = par.cipher_dir - IMB_DIR_ENCRYPT;
+
                         printf("\t%s", c_dir_names[c_dir]);
                 }
                 printf("\n");
                 printf("HASH_ALG");
                 for (col = 0; col < total_variants; col++) {
                         par = variant_list[col].params;
-                        h_alg = par.hash_alg - TEST_SHA1;
+
+                        const uint8_t h_alg = par.hash_alg - TEST_SHA1_HMAC;
+
                         printf("\t%s", h_alg_names[h_alg]);
                 }
                 printf("\n");
@@ -2327,7 +3020,7 @@ print_times(struct variant_s *variant_list, struct params_s *params,
 
         for (sz = 0; sz < sizes; sz++) {
                 if (imix_list_count != 0)
-                        printf("%d", average_job_size);
+                        printf("%u", average_job_size);
                 else if (job_size_count == 0)
                         printf("%d", job_sizes[RANGE_MIN] +
                                      (sz * job_sizes[RANGE_STEP]));
@@ -2408,7 +3101,7 @@ run_tests(void *arg)
                         goto exit_failure;
                 } else
                         fprintf(stderr, "Started counting unhalted cycles on "
-                                "core %d\nUnhalted cycles read cost = %lu "
+                                "core %u\nUnhalted cycles read cost = %lu "
                                 "cycles\n", params.core,
                                 (unsigned long)rd_cycles_cost);
         }
@@ -2453,8 +3146,8 @@ run_tests(void *arg)
 
         for (run = 0; run < NUM_RUNS; run++) {
                 if (info->print_info)
-                        fprintf(stderr, "\nStarting run %d of %d%c",
-                                run+1, NUM_RUNS,
+                        fprintf(stderr, "\nStarting run %u of %d%c",
+                                run + 1, NUM_RUNS,
                                 silent_progress_bar ? '\r' : '\n' );
 
                 variant = 0;
@@ -2557,10 +3250,10 @@ static void usage(void)
                 "-o val: Use <val> for the SHA size increment, default is 24\n"
                 "--shani-on: use SHA extensions, default: auto-detect\n"
                 "--shani-off: don't use SHA extensions\n"
-                "--gcm-job-api: use JOB API for GCM perf tests"
-                " (raw GCM API is default)\n"
+                "--force-job-api: use JOB API"
+                " (direct API used for GCM/GHASH/CHACHA20_POLY1305 API by default)\n"
                 "--gcm-sgl-api: use direct SGL API for GCM perf tests"
-                " (raw GCM API is default)\n"
+                " (direct GCM API is default)\n"
                 "--threads num: <num> for the number of threads to run"
                 " Max: %d\n"
                 "--cores mask: <mask> CPU's to run threads\n"
@@ -2576,6 +3269,7 @@ static void usage(void)
                 "            - range: test multiple sizes with following format"
                 " min:step:max (e.g. 16:16:256)\n"
                 "            (-o still applies for MAC)\n"
+                "--segment-size: size of segment to test SGL (default: 0)\n"
                 "--imix: set numbers that establish occurrence proportions"
                 " between packet sizes.\n"
                 "        It requires a list of sizes through --job-size.\n"
@@ -2590,7 +3284,14 @@ static void usage(void)
                 "--turbo: Run extended TSC to core scaling measurement\n"
                 "        (Use when turbo enabled)\n"
                 "--no-tsc-detect: don't check TSC to core scaling\n"
-                "--plot: Adjust text output for direct use with plot output\n",
+                "--tag-size: modify tag size\n"
+                "--plot: Adjust text output for direct use with plot output\n"
+                "--no-time-box: disables 100ms watchdog timer on "
+                "an algorithm@packet-size performance test\n"
+                "--burst-api: use burst API for perf tests\n"
+                "--cipher-burst-api: use cipher-only burst API for perf tests\n"
+                "--hash-burst-api: use hash-only burst API for perf tests\n"
+                "--burst-size: number of jobs to submit per burst\n",
                 MAX_NUM_THREADS + 1);
 }
 
@@ -2764,7 +3465,7 @@ parse_list(const char * const *argv, const int index, const int argc,
 
         while (token != NULL) {
                 if (count == MAX_LIST) {
-                        fprintf(stderr, "Using only the first %u sizes\n",
+                        fprintf(stderr, "Using only the first %d sizes\n",
                                 MAX_LIST);
                         break;
                 }
@@ -2935,7 +3636,7 @@ static void print_info(void)
 {
         uint32_t i;
         uint32_t supported_archs[NUM_ARCHS];
-        uint8_t archs[NUM_ARCHS];
+        uint8_t arch_tab[NUM_ARCHS];
 
         /* detect and print all archs */
         if (detect_arch(supported_archs) < 0)
@@ -2948,11 +3649,11 @@ static void print_info(void)
         printf("\n");
 
         /* detect and print best arch */
-        if (detect_best_arch(archs) != 0)
+        if (detect_best_arch(arch_tab) != 0)
                 goto print_info_err;
 
         for (i = 0; i < DIM(arch_str_map); i++)
-                if (archs[i]) {
+                if (arch_tab[i]) {
                         printf("Best architecture: %s\n",
                                arch_str_map[i].name);
                         break;
@@ -3018,8 +3719,8 @@ int main(int argc, char *argv[])
                         flags &= (~IMB_FLAG_SHANI_OFF);
                 } else if (strcmp(argv[i], "--shani-off") == 0) {
                         flags |= IMB_FLAG_SHANI_OFF;
-                } else if (strcmp(argv[i], "--gcm-job-api") == 0) {
-                        use_gcm_job_api = 1;
+                } else if (strcmp(argv[i], "--force-job-api") == 0) {
+                        use_job_api = 1;
                 } else if (strcmp(argv[i], "--gcm-sgl-api") == 0) {
                         use_gcm_sgl_api = 1;
                 } else if (strcmp(argv[i], "--quick") == 0) {
@@ -3105,7 +3806,7 @@ int main(int argc, char *argv[])
                                           job_sizes);
                         if (job_sizes[RANGE_MAX] > JOB_SIZE_TOP) {
                                 fprintf(stderr,
-                                       "Invalid job size %u (max %u)\n",
+                                       "Invalid job size %u (max %d)\n",
                                        (unsigned) job_sizes[RANGE_MAX],
                                        JOB_SIZE_TOP);
                                 return EXIT_FAILURE;
@@ -3126,7 +3827,7 @@ int main(int argc, char *argv[])
                                              sizeof(gcm_aad_size));
                         if (gcm_aad_size > AAD_SIZE_MAX) {
                                 fprintf(stderr,
-                                        "Invalid AAD size %u (max %u)!\n",
+                                        "Invalid AAD size %u (max %d)!\n",
                                         (unsigned) gcm_aad_size,
                                         AAD_SIZE_MAX);
                                 return EXIT_FAILURE;
@@ -3159,10 +3860,70 @@ int main(int argc, char *argv[])
                         turbo_enabled = 1;
                 } else if (strcmp(argv[i], "--no-tsc-detect") == 0) {
                         tsc_detect = 0;
+                } else if (strcmp(argv[i], "--tag-size") == 0) {
+                        i = get_next_num_arg((const char * const *)argv, i,
+                                             argc, &tag_size, sizeof(tag_size));
+                } else if (strcmp(argv[i], "--burst-api") == 0) {
+                        test_api = TEST_API_BURST;
+                } else if (strcmp(argv[i], "--cipher-burst-api") == 0) {
+                        test_api = TEST_API_CIPHER_BURST;
+                } else if (strcmp(argv[i], "--hash-burst-api") == 0) {
+                        test_api = TEST_API_HASH_BURST;
+                } else if (strcmp(argv[i], "--burst-size") == 0) {
+                        i = get_next_num_arg((const char * const *)argv, i,
+                                             argc, &burst_size,
+                                             sizeof(burst_size));
+                        if (burst_size > (MAX_BURST_SIZE)) {
+                                fprintf(stderr, "Burst size cannot be "
+                                        "more than %d\n", MAX_BURST_SIZE);
+                                return EXIT_FAILURE;
+                        }
+                } else if (strcmp(argv[i], "--segment-size") == 0) {
+                        i = get_next_num_arg((const char * const *)argv, i,
+                                             argc, &segment_size,
+                                             sizeof(segment_size));
+                        if (segment_size > (JOB_SIZE_TOP)) {
+                                fprintf(stderr, "Segment size cannot be "
+                                        "more than %d\n", JOB_SIZE_TOP);
+                                return EXIT_FAILURE;
+                        }
+                } else if (strcmp(argv[i], "--no-time-box") == 0) {
+                        use_timebox = 0;
                 } else {
                         usage();
                         return EXIT_FAILURE;
                 }
+
+        if (burst_size != 0 && test_api == TEST_API_JOB) {
+                fprintf(stderr, "--burst-size can only be used with "
+                        "--burst-api, --cipher-burst-api or "
+                        "--hash-burst-api options\n");
+                return EXIT_FAILURE;
+        }
+
+        if (test_api != TEST_API_JOB && burst_size == 0)
+                burst_size = DEFAULT_BURST_SIZE;
+
+        /* currently only AES-CBC & CTR supported by cipher-only burst API */
+        if (test_api == TEST_API_CIPHER_BURST &&
+            (custom_job_params.cipher_mode != TEST_CBC &&
+             custom_job_params.cipher_mode != TEST_CNTR)) {
+                fprintf(stderr, "Unsupported cipher-only burst "
+                        "API algorithm selected\n");
+                return EXIT_FAILURE;
+        }
+
+        /* currently only HMAC-SHAx algs supported by hash-only burst API */
+        if (test_api == TEST_API_HASH_BURST &&
+            ((custom_job_params.hash_alg != TEST_SHA1_HMAC) &&
+             (custom_job_params.hash_alg != TEST_SHA_224_HMAC) &&
+             (custom_job_params.hash_alg != TEST_SHA_256_HMAC) &&
+             (custom_job_params.hash_alg != TEST_SHA_384_HMAC) &&
+             (custom_job_params.hash_alg != TEST_SHA_512_HMAC))) {
+                fprintf(stderr,
+                        "Unsupported hash-only burst API algorithm selected\n");
+                return EXIT_FAILURE;
+        }
 
         if (aead_algo_set == 0 && cipher_algo_set == 0 &&
             hash_algo_set == 0) {
@@ -3171,6 +3932,7 @@ int main(int argc, char *argv[])
                 usage();
                 return EXIT_FAILURE;
         }
+
         if (aead_algo_set && (cipher_algo_set || hash_algo_set)) {
                 fprintf(stderr, "AEAD algorithm cannot be used "
                         "combined with another cipher/hash "
@@ -3186,7 +3948,7 @@ int main(int argc, char *argv[])
 
         if (custom_job_params.cipher_mode == TEST_CCM) {
                 if (ccm_aad_size > CCM_AAD_SIZE_MAX) {
-                        fprintf(stderr, "AAD cannot be higher than %u in CCM\n",
+                        fprintf(stderr, "AAD cannot be higher than %d in CCM\n",
                                 CCM_AAD_SIZE_MAX);
                         return EXIT_FAILURE;
                 }
@@ -3268,8 +4030,17 @@ int main(int argc, char *argv[])
         /* Check num cores >= number of threads */
         if ((core_mask != 0 && num_t != 0) && (num_t > bitcount(core_mask))) {
                 fprintf(stderr, "Insufficient number of cores in "
-                        "core mask (0x%lx) to run %d threads!\n",
+                        "core mask (0x%lx) to run %u threads!\n",
                         (unsigned long) core_mask, num_t);
+                return EXIT_FAILURE;
+        }
+
+        /* Check timebox option vs number of threads bigger than 1 */
+        if (use_timebox && num_t > 1) {
+                fprintf(stderr,
+                        "Time-box feature, enabled by default, doesn't work "
+                        "safely with number of threads bigger than one! Please "
+                        "use '--no-time-box' option to disable\n");
                 return EXIT_FAILURE;
         }
 
@@ -3305,7 +4076,21 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "TSC scaling to core cycles: %.3f\n",
                         get_tsc_to_core_scale(turbo_enabled));
 
-        fprintf(stderr, "SHA size incr = %d\n", sha_size_incr);
+        fprintf(stderr,
+                "Authentication size = cipher size + %u\n"
+                "Tool version: %s\n"
+                "Library version: %s\n",
+                sha_size_incr, IMB_VERSION_STR, imb_get_version_str());
+
+        if (!use_job_api)
+                fprintf(stderr, "API type: direct\n");
+        else {
+                fprintf(stderr, "API type: %s", str_api_list[test_api]);
+                if (test_api != TEST_API_JOB)
+                        fprintf(stderr, " (burst size = %u)\n", burst_size);
+                else
+                        fprintf(stderr, "\n");
+        }
 
         if (custom_job_params.cipher_mode == TEST_GCM)
                 fprintf(stderr, "GCM AAD = %"PRIu64"\n", gcm_aad_size);
@@ -3331,6 +4116,16 @@ int main(int argc, char *argv[])
         init_offsets(cache_type);
 
         srand(ITER_SCALE_LONG + ITER_SCALE_SHORT + ITER_SCALE_SMOKE);
+
+#ifdef LINUX
+        if (use_timebox) {
+                /* set up timebox callback function */
+                if (signal(SIGALRM, timebox_callback) == SIG_ERR) {
+                        perror("signal(SIGALRM)");
+                        return EXIT_FAILURE;
+                }
+        }
+#endif
 
         if (num_t > 1) {
                 uint32_t n;

@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2020-2021, Intel Corporation
+;; Copyright (c) 2020-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -29,7 +29,9 @@
 %define crc32_refl_const_inc_included
 
 ;; functions
+%ifdef AESNI_EMU
 extern crc32_refl_by8_sse_no_aesni
+%endif
 extern crc32_refl_by8_sse
 extern crc32_refl_by8_avx
 extern crc32_refl_by16_vclmul_avx512

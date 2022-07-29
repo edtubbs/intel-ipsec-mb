@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2019-2021, Intel Corporation
+;; Copyright (c) 2019-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -64,29 +64,7 @@
 %endmacro
 
 ;
-; This macro clears any YMM registers passed
-;
-%macro clear_ymms 1-16
-%define %%NUM_REGS %0
-%rep %%NUM_REGS
-        vpxor   %1, %1
-%rotate 1
-%endrep
-%endmacro
-
-;
-; This macro clears any ZMM registers passed
-;
-%macro clear_zmms 1-32
-%define %%NUM_REGS %0
-%rep %%NUM_REGS
-        vpxorq  %1, %1
-%rotate 1
-%endrep
-%endmacro
-
-;
-; This macro clears all scratch GP registers
+; This macro clears scratch GP registers
 ; for Windows or Linux
 ;
 %macro clear_scratch_gps_asm 0
@@ -97,7 +75,7 @@
 %endmacro
 
 ;
-; This macro clears all scratch XMM registers on SSE
+; This macro clears scratch XMM registers on SSE
 ;
 %macro clear_scratch_xmms_sse_asm 0
 %ifdef LINUX
@@ -117,7 +95,7 @@
 %endmacro
 
 ;
-; This macro clears all scratch XMM registers on AVX
+; This macro clears scratch XMM registers on AVX
 ;
 %macro clear_scratch_xmms_avx_asm 0
 %ifdef LINUX
@@ -126,8 +104,8 @@
         vpxor   xmm %+ i, xmm %+ i
 %assign i (i+1)
 %endrep
-; On Windows, XMM0-XMM5 registers are scratch registers
 %else
+; On Windows, XMM0-XMM5 registers are scratch registers
 %assign i 0
 %rep 6
         vpxor   xmm %+ i, xmm %+ i
@@ -137,18 +115,27 @@
 %endmacro
 
 ;
-; This macro clears all scratch YMM registers
+; This macro clears scratch YMM registers
 ;
 ; It should be called before restoring the XMM registers
 ; for Windows (XMM6-XMM15)
 ;
 %macro clear_scratch_ymms_asm 0
+%ifdef LINUX
 ; On Linux, all YMM registers are scratch registers
         vzeroall
+%else
+; On Windows, XMM0-XMM5 registers are scratch registers
+%assign i 0
+%rep 6
+        vpxor   xmm %+ i, xmm %+ i
+%assign i (i+1)
+%endrep
+%endif ; LINUX
 %endmacro
 
 ;
-; This macro clears all scratch ZMM registers
+; This macro clears scratch ZMM registers
 ;
 ; It should be called before restoring the XMM registers
 ; for Windows (XMM6-XMM15). YMM registers are used
@@ -157,13 +144,33 @@
 ; also the upper 256 bits
 ;
 %macro clear_scratch_zmms_asm 0
+%ifdef LINUX
 ; On Linux, all ZMM registers are scratch registers
-       vzeroall
-%assign i 16
-%rep 16
-        vpxorq  xmm %+ i, xmm %+ i
+        vpxorq  xmm0, xmm0, xmm0
+        vpxorq  xmm1, xmm1, xmm1
+        vpxorq  xmm2, xmm2, xmm2
+%assign i 3
+%rep (16 + 13)
+%assign j (i % 3)
+        vmovdqa64  xmm %+ i, xmm %+ j
 %assign i (i+1)
 %endrep
+%else
+; On Windows, XMM0-XMM5 registers are scratch registers
+        vpxorq  xmm0, xmm0, xmm0
+        vpxorq  xmm1, xmm1, xmm1
+        vpxorq  xmm2, xmm2, xmm2
+        vmovdqa64  xmm3, xmm0
+        vmovdqa64  xmm4, xmm1
+        vmovdqa64  xmm5, xmm2
+%assign i 16
+%rep 16
+%assign j (i % 3)
+        vmovdqa64  xmm %+ i, xmm %+ j
+%assign i (i+1)
+%endrep
+%endif ; LINUX
+       vzeroupper
 %endmacro
 
 ;
@@ -203,12 +210,16 @@
 ; also the upper 256 bits
 ;
 %macro clear_all_zmms_asm 0
-       vzeroall
-%assign i 16
-%rep 16
-        vpxorq  xmm %+ i, xmm %+ i
+        vpxorq  xmm0, xmm0, xmm0
+        vpxorq  xmm1, xmm1, xmm1
+        vpxorq  xmm2, xmm2, xmm2
+%assign i 3
+%rep (16 + 13)
+%assign j (i % 3)
+        vmovdqa64  xmm %+ i, xmm %+ j
 %assign i (i+1)
 %endrep
+        vzeroupper
 %endmacro
 
 %endif ;; _CLEAR_REGS_ASM

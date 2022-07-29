@@ -1,5 +1,5 @@
 /*******************************************************************************
-  Copyright (c) 2018-2021, Intel Corporation
+  Copyright (c) 2018-2022, Intel Corporation
 
   Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions are met:
@@ -38,11 +38,6 @@
 #else
 #include <intrin.h>
 #endif
-
-typedef union {
-        uint32_t i;
-        uint8_t byte[4];
-} byte_split_t;
 
 static const DECLARE_ALIGNED(uint8_t aes_sbox[16][16], 16) = {
         { 0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5,

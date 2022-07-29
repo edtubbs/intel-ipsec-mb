@@ -1,5 +1,5 @@
 /*******************************************************************************
-  Copyright (c) 2012-2021, Intel Corporation
+  Copyright (c) 2012-2022, Intel Corporation
 
   Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions are met:
@@ -114,17 +114,17 @@ typedef struct {
 
 typedef struct {
         DECLARE_ALIGNED(uint32_t digest[SHA1_DIGEST_SZ], 32);
-        uint8_t *data_ptr[AVX512_NUM_SHA1_LANES];
+        const uint8_t *data_ptr[AVX512_NUM_SHA1_LANES];
 } SHA1_ARGS;
 
 typedef struct {
         DECLARE_ALIGNED(uint32_t digest[SHA256_DIGEST_SZ], 32);
-        uint8_t *data_ptr[AVX512_NUM_SHA256_LANES];
+        const uint8_t *data_ptr[AVX512_NUM_SHA256_LANES];
 } SHA256_ARGS;
 
 typedef struct {
         DECLARE_ALIGNED(uint64_t digest[SHA512_DIGEST_SZ], 32);
-        uint8_t *data_ptr[AVX512_NUM_SHA512_LANES];
+        const uint8_t *data_ptr[AVX512_NUM_SHA512_LANES];
 }  SHA512_ARGS;
 
 typedef struct {
@@ -155,7 +155,7 @@ typedef struct {
         DECLARE_ALIGNED(uint8_t *out[16], 64);
         const uint8_t *keys[16];
         DECLARE_ALIGNED(uint8_t iv[16*32], 32);
-        DECLARE_ALIGNED(uint32_t digest[16], 64);
+        DECLARE_ALIGNED(uint32_t digest[16*4], 64);
         /* Memory for 128 bytes of KS for 16 buffers */
         DECLARE_ALIGNED(uint32_t ks[16 * 2 * 16], 64);
 } ZUC_ARGS_x16;
@@ -339,6 +339,15 @@ typedef struct {
 } MB_MGR_HMAC_SHA_1_OOO;
 
 typedef struct {
+        SHA1_ARGS args;
+        DECLARE_ALIGNED(uint64_t lens[AVX512_NUM_SHA1_LANES], 32);
+        uint64_t unused_lanes;
+        HMAC_SHA1_LANE_DATA ldata[AVX512_NUM_SHA1_LANES];
+        uint32_t num_lanes_inuse;
+        uint64_t road_block;
+} MB_MGR_SHA_1_OOO;
+
+typedef struct {
         SHA256_ARGS args;
         DECLARE_ALIGNED(uint16_t lens[16], 16);
         uint64_t unused_lanes;
@@ -348,12 +357,30 @@ typedef struct {
 } MB_MGR_HMAC_SHA_256_OOO;
 
 typedef struct {
+        SHA256_ARGS args;
+        DECLARE_ALIGNED(uint64_t lens[AVX512_NUM_SHA256_LANES], 16);
+        uint64_t unused_lanes;
+        HMAC_SHA1_LANE_DATA ldata[AVX512_NUM_SHA256_LANES];
+        uint32_t num_lanes_inuse;
+        uint64_t road_block;
+} MB_MGR_SHA_256_OOO;
+
+typedef struct {
         SHA512_ARGS args;
         DECLARE_ALIGNED(uint16_t lens[8], 16);
         uint64_t unused_lanes;
         HMAC_SHA512_LANE_DATA ldata[AVX512_NUM_SHA512_LANES];
         uint64_t road_block;
 } MB_MGR_HMAC_SHA_512_OOO;
+
+typedef struct {
+        SHA512_ARGS args;
+        DECLARE_ALIGNED(uint64_t lens[AVX512_NUM_SHA512_LANES], 16);
+        uint64_t unused_lanes;
+        HMAC_SHA512_LANE_DATA ldata[AVX512_NUM_SHA512_LANES];
+        uint32_t num_lanes_inuse;
+        uint64_t road_block;
+} MB_MGR_SHA_512_OOO;
 
 /* MD5-HMAC out-of-order scheduler fields */
 typedef struct {
@@ -395,4 +422,103 @@ init_mb_mgr_avx2_internal(IMB_MGR *state, const int reset_mgrs);
 IMB_DLL_LOCAL void
 init_mb_mgr_avx512_internal(IMB_MGR *state, const int reset_mgrs);
 
+IMB_DLL_EXPORT uint32_t
+submit_burst_sse(IMB_MGR *state, IMB_JOB *jobs, const uint32_t n_jobs);
+IMB_DLL_EXPORT uint32_t
+submit_burst_avx(IMB_MGR *state, IMB_JOB *jobs, const uint32_t n_jobs);
+IMB_DLL_EXPORT uint32_t
+submit_burst_avx2(IMB_MGR *state, IMB_JOB *jobs, const uint32_t n_jobs);
+IMB_DLL_EXPORT uint32_t
+submit_burst_avx512(IMB_MGR *state, IMB_JOB *jobs, const uint32_t n_jobs);
+
+IMB_DLL_EXPORT uint32_t
+submit_burst_nocheck_sse(IMB_MGR *state, IMB_JOB *jobs, const uint32_t n_jobs);
+IMB_DLL_EXPORT uint32_t
+submit_burst_nocheck_avx(IMB_MGR *state, IMB_JOB *jobs, const uint32_t n_jobs);
+IMB_DLL_EXPORT uint32_t
+submit_burst_nocheck_avx2(IMB_MGR *state, IMB_JOB *jobs, const uint32_t n_jobs);
+IMB_DLL_EXPORT uint32_t
+submit_burst_nocheck_avx512(IMB_MGR *state, IMB_JOB *jobs,
+                            const uint32_t n_jobs);
+IMB_DLL_EXPORT uint32_t
+submit_cipher_burst_sse(IMB_MGR *state, IMB_JOB *jobs,
+                        const uint32_t n_jobs,
+                        const IMB_CIPHER_MODE cipher,
+                        const IMB_CIPHER_DIRECTION dir,
+                        const IMB_KEY_SIZE_BYTES key_size);
+IMB_DLL_EXPORT uint32_t
+submit_cipher_burst_avx(IMB_MGR *state, IMB_JOB *jobs,
+                        const uint32_t n_jobs,
+                        const IMB_CIPHER_MODE cipher,
+                        const IMB_CIPHER_DIRECTION dir,
+                        const IMB_KEY_SIZE_BYTES key_size);
+IMB_DLL_EXPORT uint32_t
+submit_cipher_burst_avx2(IMB_MGR *state, IMB_JOB *jobs,
+                         const uint32_t n_jobs,
+                         const IMB_CIPHER_MODE cipher,
+                         const IMB_CIPHER_DIRECTION dir,
+                         const IMB_KEY_SIZE_BYTES key_size);
+IMB_DLL_EXPORT uint32_t
+submit_cipher_burst_avx512(IMB_MGR *state, IMB_JOB *jobs,
+                           const uint32_t n_jobs,
+                           const IMB_CIPHER_MODE cipher,
+                           const IMB_CIPHER_DIRECTION dir,
+                           const IMB_KEY_SIZE_BYTES key_size);
+
+IMB_DLL_EXPORT uint32_t
+submit_cipher_burst_nocheck_sse(IMB_MGR *state, IMB_JOB *jobs,
+                                const uint32_t n_jobs,
+                                const IMB_CIPHER_MODE cipher,
+                                const IMB_CIPHER_DIRECTION dir,
+                                const IMB_KEY_SIZE_BYTES key_size);
+IMB_DLL_EXPORT uint32_t
+submit_cipher_burst_nocheck_avx(IMB_MGR *state, IMB_JOB *jobs,
+                                const uint32_t n_jobs,
+                                const IMB_CIPHER_MODE cipher,
+                                const IMB_CIPHER_DIRECTION dir,
+                                const IMB_KEY_SIZE_BYTES key_size);
+IMB_DLL_EXPORT uint32_t
+submit_cipher_burst_nocheck_avx2(IMB_MGR *state, IMB_JOB *jobs,
+                                 const uint32_t n_jobs,
+                                 const IMB_CIPHER_MODE cipher,
+                                 const IMB_CIPHER_DIRECTION dir,
+                                 const IMB_KEY_SIZE_BYTES key_size);
+IMB_DLL_EXPORT uint32_t
+submit_cipher_burst_nocheck_avx512(IMB_MGR *state, IMB_JOB *jobs,
+                                   const uint32_t n_jobs,
+                                   const IMB_CIPHER_MODE cipher,
+                                   const IMB_CIPHER_DIRECTION dir,
+                                   const IMB_KEY_SIZE_BYTES key_size);
+IMB_DLL_EXPORT uint32_t
+submit_hash_burst_sse(IMB_MGR *state, IMB_JOB *jobs,
+                      const uint32_t n_jobs,
+                      const IMB_HASH_ALG hash);
+IMB_DLL_EXPORT uint32_t
+submit_hash_burst_avx(IMB_MGR *state, IMB_JOB *jobs,
+                      const uint32_t n_jobs,
+                      const IMB_HASH_ALG hash);
+IMB_DLL_EXPORT uint32_t
+submit_hash_burst_avx2(IMB_MGR *state, IMB_JOB *jobs,
+                       const uint32_t n_jobs,
+                       const IMB_HASH_ALG hash);
+IMB_DLL_EXPORT uint32_t
+submit_hash_burst_avx512(IMB_MGR *state, IMB_JOB *jobs,
+                         const uint32_t n_jobs,
+                         const IMB_HASH_ALG hash);
+IMB_DLL_EXPORT uint32_t
+submit_hash_burst_nocheck_sse(IMB_MGR *state, IMB_JOB *jobs,
+                              const uint32_t n_jobs,
+                              const IMB_HASH_ALG hash);
+IMB_DLL_EXPORT uint32_t
+submit_hash_burst_nocheck_avx(IMB_MGR *state, IMB_JOB *jobs,
+                              const uint32_t n_jobs,
+                              const IMB_HASH_ALG hash);
+IMB_DLL_EXPORT uint32_t
+submit_hash_burst_nocheck_avx2(IMB_MGR *state, IMB_JOB *jobs,
+                               const uint32_t n_jobs,
+                               const IMB_HASH_ALG hash);
+IMB_DLL_EXPORT uint32_t
+submit_hash_burst_nocheck_avx512(IMB_MGR *state, IMB_JOB *jobs,
+                                 const uint32_t n_jobs,
+                                 const IMB_HASH_ALG hash);
 #endif /* IMB_IPSEC_MB_INTERNAL_H */

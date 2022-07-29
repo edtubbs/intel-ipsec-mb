@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2020-2021, Intel Corporation
+;; Copyright (c) 2020-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -27,4 +27,4 @@
 
 %define AES_CBCS_ENC_X4 aes_cbcs_1_9_enc_128_x4_no_aesni
 %define FLUSH_JOB_AES_CBCS_ENC flush_job_aes128_cbcs_1_9_enc_sse_no_aesni
-%include "sse/mb_mgr_aes128_cbcs_1_9_flush_sse.asm"
+%include "sse_t1/mb_mgr_aes128_cbcs_1_9_flush_sse.asm"

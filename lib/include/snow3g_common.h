@@ -1,5 +1,5 @@
 /*******************************************************************************
-  Copyright (c) 2009-2021, Intel Corporation
+  Copyright (c) 2009-2022, Intel Corporation
 
   Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions are met:
@@ -1689,6 +1689,63 @@ static inline __m256i snow3g_keystream_8_4(snow3gKeyState8_t *pCtx)
         return keyStream;
 }
 
+/*
+ * @brief 8x8 uint32_t matrix tranpose.
+ *
+ * @param[in/clobbered] in      Array of rows to transpose
+ * @param[out]          out     Array of transposed columns
+ */
+static inline void
+transpose8xu32_avx2(__m256i in[8], __m256i out[8])
+{
+        __m256i tmp[2];
+
+        tmp[0] = (__m256i) _mm256_shuffle_ps((__m256)in[0], (__m256)in[1],
+                                             0x44);
+        in[0]  = (__m256i) _mm256_shuffle_ps((__m256)in[0], (__m256)in[1],
+                                             0xEE);
+        tmp[1] = (__m256i) _mm256_shuffle_ps((__m256)in[2], (__m256)in[3],
+                                             0x44);
+        in[2]  = (__m256i) _mm256_shuffle_ps((__m256)in[2], (__m256)in[3],
+                                             0xEE);
+
+        in[3]  = (__m256i) _mm256_shuffle_ps((__m256)tmp[0],(__m256) tmp[1],
+                                             0xDD);
+        in[1]  = (__m256i) _mm256_shuffle_ps((__m256)in[0], (__m256) in[2],
+                                             0x88);
+        in[0]  = (__m256i) _mm256_shuffle_ps((__m256)in[0], (__m256) in[2],
+                                             0xDD);
+        tmp[0] = (__m256i) _mm256_shuffle_ps((__m256)tmp[0],(__m256) tmp[1],
+                                             0x88);
+
+        in[2]  = (__m256i) _mm256_shuffle_ps((__m256)in[4], (__m256)in[5],
+                                             0x44);
+        in[4]  = (__m256i) _mm256_shuffle_ps((__m256)in[4], (__m256)in[5],
+                                             0xEE);
+        tmp[1] = (__m256i) _mm256_shuffle_ps((__m256)in[6], (__m256)in[7],
+                                             0x44);
+        in[6]  = (__m256i) _mm256_shuffle_ps((__m256)in[6], (__m256)in[7],
+                                             0xEE);
+
+        in[7]  = (__m256i) _mm256_shuffle_ps((__m256)in[2],(__m256) tmp[1],
+                                             0xDD);
+        in[5]  = (__m256i) _mm256_shuffle_ps((__m256)in[4], (__m256) in[6],
+                                             0x88);
+        in[4]  = (__m256i) _mm256_shuffle_ps((__m256)in[4], (__m256) in[6],
+                                             0xDD);
+        tmp[1] = (__m256i) _mm256_shuffle_ps((__m256)in[2],(__m256) tmp[1],
+                                             0x88);
+
+        out[6]  = _mm256_permute2f128_si256(in[5], in[1], 0x13);
+        out[2]  = _mm256_permute2f128_si256(in[5], in[1], 0x02);
+        out[5]  = _mm256_permute2f128_si256(in[7], in[3], 0x13);
+        out[1]  = _mm256_permute2f128_si256(in[7], in[3], 0x02);
+        out[7]  = _mm256_permute2f128_si256(in[4], in[0], 0x13);
+        out[3]  = _mm256_permute2f128_si256(in[4], in[0], 0x02);
+        out[4]  = _mm256_permute2f128_si256(tmp[1], tmp[0], 0x13);
+        out[0]  = _mm256_permute2f128_si256(tmp[1], tmp[0], 0x02);
+}
+
 /**
  * @brief Generates 32 bytes of key stream 8 buffers at a time
  *
@@ -1698,81 +1755,24 @@ static inline __m256i snow3g_keystream_8_4(snow3gKeyState8_t *pCtx)
 static inline void snow3g_keystream_8_32(snow3gKeyState8_t *pCtx,
                                          __m256i *pKeyStream)
 {
-
-        __m256i temp[8];
-
-        /** produces the next 4 bytes for each buffer */
-        int i;
+        __m256i in[8];
+        unsigned int i;
 
         /** Byte reversal on each KS */
-        static const __m256i mask1 = {
-                0x0001020304050607ULL, 0x08090a0b0c0d0e0fULL,
-                0x0001020304050607ULL, 0x08090a0b0c0d0e0fULL
-        };
-        /** Reversal, shifted 4 bytes right */
-        static const __m256i mask2 = {
-                0x0405060708090a0bULL, 0x0c0d0e0f00010203ULL,
-                0x0405060708090a0bULL, 0x0c0d0e0f00010203ULL
-        };
-        /** Reversal, shifted 8 bytes right */
-        static const __m256i mask3 = {
-                0x08090a0b0c0d0e0fULL, 0x0001020304050607ULL,
-                0x08090a0b0c0d0e0fULL, 0x0001020304050607ULL
-        };
-        /** Reversal, shifted 12 bytes right */
-        static const __m256i mask4 = {
-                0x0c0d0e0f00010203ULL, 0x0405060708090a0bULL,
-                0x0c0d0e0f00010203ULL, 0x0405060708090a0bULL
+        static const __m256i mask = {
+                0x0405060700010203ULL, 0x0c0d0e0f08090a0bULL,
+                0x0405060700010203ULL, 0x0c0d0e0f08090a0bULL
         };
 
-        temp[0] = _mm256_shuffle_epi8(snow3g_keystream_8_4(pCtx), mask1);
-        temp[1] = _mm256_shuffle_epi8(snow3g_keystream_8_4(pCtx), mask2);
-        temp[2] = _mm256_shuffle_epi8(snow3g_keystream_8_4(pCtx), mask3);
-        temp[3] = _mm256_shuffle_epi8(snow3g_keystream_8_4(pCtx), mask4);
-        temp[4] = _mm256_shuffle_epi8(snow3g_keystream_8_4(pCtx), mask1);
-        temp[5] = _mm256_shuffle_epi8(snow3g_keystream_8_4(pCtx), mask2);
-        temp[6] = _mm256_shuffle_epi8(snow3g_keystream_8_4(pCtx), mask3);
-        temp[7] = _mm256_shuffle_epi8(snow3g_keystream_8_4(pCtx), mask4);
+        /** produces the next 4 bytes for each buffer */
+        for (i = 0; i < 8; i++)
+                in[i] = _mm256_shuffle_epi8(snow3g_keystream_8_4(pCtx), mask);
 
-        __m256i blended[8];
-        /* blends KS together: 128bit slice consists
-           of 4 32-bit words for one packet */
-        blended[0] = _mm256_blend_epi32(temp[0], temp[1], 0xaa);
-        blended[1] = _mm256_blend_epi32(temp[0], temp[1], 0x55);
-        blended[2] = _mm256_blend_epi32(temp[2], temp[3], 0xaa);
-        blended[3] = _mm256_blend_epi32(temp[2], temp[3], 0x55);
-        blended[4] = _mm256_blend_epi32(temp[4], temp[5], 0xaa);
-        blended[5] = _mm256_blend_epi32(temp[4], temp[5], 0x55);
-        blended[6] = _mm256_blend_epi32(temp[6], temp[7], 0xaa);
-        blended[7] = _mm256_blend_epi32(temp[6], temp[7], 0x55);
+        /* Transposes the dwords of KS for all buffers into
+         * 32 consecutive KS bytes for each buffer */
+        transpose8xu32_avx2(in, pKeyStream);
 
-        temp[0] = _mm256_blend_epi32(blended[0], blended[2], 0xcc);
-        temp[1] = _mm256_blend_epi32(blended[1], blended[3], 0x99);
-        temp[2] = _mm256_blend_epi32(blended[0], blended[2], 0x33);
-        temp[3] = _mm256_blend_epi32(blended[1], blended[3], 0x66);
-        temp[4] = _mm256_blend_epi32(blended[4], blended[6], 0xcc);
-        temp[5] = _mm256_blend_epi32(blended[5], blended[7], 0x99);
-        temp[6] = _mm256_blend_epi32(blended[4], blended[6], 0x33);
-        temp[7] = _mm256_blend_epi32(blended[5], blended[7], 0x66);
 
-        /** sorts 32 bit words back into order */
-        blended[0] = temp[0];
-        blended[1] = _mm256_shuffle_epi32(temp[1], 0x39);
-        blended[2] = _mm256_shuffle_epi32(temp[2], 0x4e);
-        blended[3] = _mm256_shuffle_epi32(temp[3], 0x93);
-        blended[4] = temp[4];
-        blended[5] = _mm256_shuffle_epi32(temp[5], 0x39);
-        blended[6] = _mm256_shuffle_epi32(temp[6], 0x4e);
-        blended[7] = _mm256_shuffle_epi32(temp[7], 0x93);
-
-        for (i = 0; i < 4; i++) {
-                pKeyStream[i] =
-                        _mm256_permute2x128_si256(blended[i],
-                                                  blended[i + 4], 0x20);
-                pKeyStream[i + 4] =
-                        _mm256_permute2x128_si256(blended[i],
-                                                   blended[i + 4], 0x31);
-        }
 }
 #endif /* AVX2 */
 
@@ -2183,160 +2183,6 @@ snow3gStateInitialize_8(snow3gKeyState8_t *pCtx,
 }
 #endif /* AVX2 */
 
-static inline void
-preserve_bits(uint64_t *KS,
-              const uint8_t *pcBufferOut, const uint8_t *pcBufferIn,
-              SafeBuf *safeOutBuf, SafeBuf *safeInBuf,
-              const uint8_t bit_len, const uint8_t byte_len)
-{
-        const uint64_t mask = UINT64_MAX << (SNOW3G_BLOCK_SIZE * 8 - bit_len);
-
-        /* Clear the last bits of the key stream and the input
-         * (input only in out-of-place case) */
-        *KS &= mask;
-        if (pcBufferIn != pcBufferOut) {
-                const uint64_t swapMask = BSWAP64(mask);
-
-                safeInBuf->b64 &= swapMask;
-
-                /*
-                 * Merge the last bits from the output, to be preserved,
-                 * in the key stream, to be XOR'd with the input
-                 * (which last bits are 0, maintaining the output bits)
-                 */
-                memcpy_keystrm(safeOutBuf->b8, pcBufferOut, byte_len);
-                *KS |= BSWAP64(safeOutBuf->b64 & ~swapMask);
-        }
-}
-
-/**
- * @brief Core SNOW3G F8 bit algorithm for the 3GPP confidentiality algorithm
- *
- * @param[in]    pCtx          Context where the scheduled keys are stored
- * @param[in]    pIn           Input buffer
- * @param[out]   pOut          Output buffer
- * @param[in]    lengthInBits  length in bits of the data to be encrypted
- * @param[in]    offsetinBits  offset in input buffer, where data are valid
- */
-static inline void f8_snow3g_bit(snow3gKeyState1_t *pCtx,
-                                 const void *pIn,
-                                 void *pOut,
-                                 const uint32_t lengthInBits,
-                                 const uint32_t offsetInBits)
-{
-        const uint8_t *pBufferIn = pIn;
-        uint8_t *pBufferOut = pOut;
-        uint32_t cipherLengthInBits = lengthInBits;
-        uint64_t shiftrem = 0;
-        uint64_t KS8, KS8bit; /* 8 bytes of key stream */
-        const uint8_t *pcBufferIn = pBufferIn + (offsetInBits / 8);
-        uint8_t *pcBufferOut = pBufferOut + (offsetInBits / 8);
-        /* Offset into the first byte (0 - 7 bits) */
-        uint32_t remainOffset = offsetInBits % 8;
-        SafeBuf safeInBuf = {0};
-        SafeBuf safeOutBuf = {0};
-
-        /* Now run the block cipher */
-
-        /* Start with potential partial block (due to offset and length) */
-        KS8 = snow3g_keystream_1_8(pCtx);
-        KS8bit = KS8 >> remainOffset;
-        /* Only one block to encrypt */
-        if (cipherLengthInBits < (64 - remainOffset)) {
-                const uint32_t byteLength = (cipherLengthInBits + 7) / 8;
-
-                memcpy_keystrm(safeInBuf.b8, pcBufferIn, byteLength);
-                /*
-                 * If operation is Out-of-place and there is offset
-                 * to be applied, "remainOffset" bits from the output buffer
-                 * need to be preserved (only applicable to first byte,
-                 * since remainOffset is up to 7 bits)
-                 */
-                if ((pIn != pOut) && remainOffset) {
-                        const uint8_t mask8 = (uint8_t)
-                                (1 << (8 - remainOffset)) - 1;
-
-                        safeInBuf.b8[0] = (safeInBuf.b8[0] & mask8) |
-                                (pcBufferOut[0] & ~mask8);
-                }
-                /* If last byte is a partial byte, the last bits of the output
-                 * need to be preserved */
-                const uint8_t bitlen_with_off = remainOffset +
-                        cipherLengthInBits;
-
-                if ((bitlen_with_off & 0x7) != 0)
-                        preserve_bits(&KS8bit, pcBufferOut, pcBufferIn,
-                                      &safeOutBuf, &safeInBuf,
-                                      bitlen_with_off, byteLength);
-
-                xor_keystrm_rev(safeOutBuf.b8, safeInBuf.b8, KS8bit);
-                memcpy_keystrm(pcBufferOut, safeOutBuf.b8, byteLength);
-                return;
-        }
-        /*
-         * If operation is Out-of-place and there is offset
-         * to be applied, "remainOffset" bits from the output buffer
-         * need to be preserved (only applicable to first byte,
-         * since remainOffset is up to 7 bits)
-         */
-        if ((pIn != pOut) && remainOffset) {
-                const uint8_t mask8 = (uint8_t)(1 << (8 - remainOffset)) - 1;
-
-                memcpy_keystrm(safeInBuf.b8, pcBufferIn, 8);
-                safeInBuf.b8[0] = (safeInBuf.b8[0] & mask8) |
-                        (pcBufferOut[0] & ~mask8);
-                xor_keystrm_rev(pcBufferOut, safeInBuf.b8, KS8bit);
-                pcBufferIn += SNOW3G_BLOCK_SIZE;
-        } else {
-                /* At least 64 bits to produce (including offset) */
-                pcBufferIn = xor_keystrm_rev(pcBufferOut, pcBufferIn, KS8bit);
-        }
-
-        if (remainOffset != 0)
-                shiftrem = KS8 << (64 - remainOffset);
-        cipherLengthInBits -= SNOW3G_BLOCK_SIZE * 8 - remainOffset;
-        pcBufferOut += SNOW3G_BLOCK_SIZE;
-
-        while (cipherLengthInBits) {
-                /* produce the next block of key stream */
-                KS8 = snow3g_keystream_1_8(pCtx);
-                KS8bit = (KS8 >> remainOffset) | shiftrem;
-                if (remainOffset != 0)
-                        shiftrem = KS8 << (64 - remainOffset);
-                if (cipherLengthInBits >= SNOW3G_BLOCK_SIZE * 8) {
-                        pcBufferIn = xor_keystrm_rev(pcBufferOut,
-                                                     pcBufferIn, KS8bit);
-                        cipherLengthInBits -= SNOW3G_BLOCK_SIZE * 8;
-                        pcBufferOut += SNOW3G_BLOCK_SIZE;
-                        /* loop variant */
-                } else {
-                        /* end of the loop, handle the last bytes */
-                        const uint32_t byteLength =
-                                (cipherLengthInBits + 7) / 8;
-
-                        memcpy_keystrm(safeInBuf.b8, pcBufferIn,
-                                       byteLength);
-
-                        /* If last byte is a partial byte, the last bits
-                         * of the output need to be preserved */
-                        if ((cipherLengthInBits & 0x7) != 0)
-                                preserve_bits(&KS8bit, pcBufferOut, pcBufferIn,
-                                              &safeOutBuf, &safeInBuf,
-                                              cipherLengthInBits, byteLength);
-
-                        xor_keystrm_rev(safeOutBuf.b8, safeInBuf.b8, KS8bit);
-                        memcpy_keystrm(pcBufferOut, safeOutBuf.b8, byteLength);
-                        cipherLengthInBits = 0;
-                }
-        }
-#ifdef SAFE_DATA
-        CLEAR_VAR(&KS8, sizeof(KS8));
-        CLEAR_VAR(&KS8bit, sizeof(KS8bit));
-        CLEAR_MEM(&safeInBuf, sizeof(safeInBuf));
-        CLEAR_MEM(&safeOutBuf, sizeof(safeOutBuf));
-#endif
-}
-
 /**
  * @brief Core SNOW3G F8 algorithm for the 3GPP confidentiality algorithm
  *
@@ -2626,25 +2472,18 @@ void SNOW3G_F8_1_BUFFER_BIT(const snow3g_key_schedule_t *pHandle,
                 return;
         }
 #endif
-#ifdef SAFE_DATA
-        CLEAR_SCRATCH_SIMD_REGS();
-#endif /* SAFE_DATA */
+        uint8_t save_start = 0, save_end = 0;
+        uint8_t *dst = &((uint8_t *) pBufferOut)[offsetInBits >> 3];
 
-        snow3gKeyState1_t ctx;
+        save_msg_start_end(dst, offsetInBits & 7, lengthInBits, &save_start,
+                           &save_end);
+        copy_bits(dst, pBufferIn, offsetInBits, lengthInBits);
 
-        /* Initialize the schedule from the IV */
-        snow3gStateInitialize_1(&ctx, pHandle, pIV);
+        SNOW3G_F8_1_BUFFER(pHandle, pIV, dst, dst, (lengthInBits + 7) / 8);
 
-        /* Clock FSM and LFSR once, ignore the key stream */
-        (void) snow3g_keystream_1_4(&ctx);
-
-        f8_snow3g_bit(&ctx, pBufferIn, pBufferOut, lengthInBits, offsetInBits);
-
-#ifdef SAFE_DATA
-        CLEAR_MEM(&ctx, sizeof(ctx));
-        CLEAR_SCRATCH_GPS();
-        CLEAR_SCRATCH_SIMD_REGS();
-#endif /* SAFE_DATA */
+        shift_bits(dst, offsetInBits & 7, lengthInBits);
+        restore_msg_start_end(dst, offsetInBits & 7, lengthInBits, save_start,
+                              save_end);
 }
 
 /**
@@ -3870,6 +3709,8 @@ void snow3g_f9_1_buffer_vaes_avx512(const snow3g_key_schedule_t *pHandle,
         CLEAR_MEM(&ctx, sizeof(ctx));
         CLEAR_SCRATCH_GPS();
         CLEAR_SCRATCH_SIMD_REGS();
+#else
+        _mm256_zeroupper();
 #endif /* SAFE_DATA */
 }
 #endif /* AVX512 */

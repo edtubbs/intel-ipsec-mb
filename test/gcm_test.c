@@ -1,5 +1,5 @@
 /**********************************************************************
-  Copyright(c) 2011-2021 Intel Corporation All rights reserved.
+  Copyright(c) 2011-2022 Intel Corporation All rights reserved.
 
   Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions
@@ -43,6 +43,7 @@
 #define IV_SZ 12
 #define DIGEST_SZ 16
 #define MAX_KEY_SZ 32
+#define GCM_MAX_JOBS 32
 
 /*
  * 60-Byte Packet Encryption Using GCM-AES-128
@@ -1316,6 +1317,14 @@ typedef int (*gcm_enc_dec_fn_t)(IMB_MGR *, const struct gcm_key_data *,
                                 const uint8_t *, uint64_t,
                                 uint8_t *, uint64_t, IMB_KEY_SIZE_BYTES);
 
+typedef int (*gcm_enc_dec_many_fn_t)(IMB_MGR *, const struct gcm_key_data *,
+                                     struct gcm_context_data **,
+                                     uint8_t **, const uint8_t *,
+                                     const uint64_t, const uint8_t *,
+                                     const uint64_t, const uint8_t *,
+                                     const uint64_t, uint8_t **, const uint64_t,
+                                     const IMB_KEY_SIZE_BYTES, const uint32_t);
+
 static IMB_MGR *p_gcm_mgr = NULL;
 
 static int check_data(const uint8_t *test, const uint8_t *expected,
@@ -1621,18 +1630,186 @@ sgl_aes_gcm_dec(IMB_MGR *p_mgr,
 }
 
 /*****************************************************************************
+ * burst API
+ *****************************************************************************/
+static int
+aes_gcm_burst(IMB_MGR *mb_mgr,
+              const IMB_CIPHER_DIRECTION cipher_dir,
+              const struct gcm_key_data *key,
+              const uint64_t key_len,
+              uint8_t **out, const uint8_t *in, const uint64_t len,
+              const uint8_t *iv, const uint64_t iv_len, const uint8_t *aad,
+              const uint64_t aad_len, uint8_t **auth_tag,
+              const uint64_t auth_tag_len, struct gcm_context_data **ctx,
+              const IMB_CIPHER_MODE cipher_mode, const IMB_SGL_STATE sgl_state,
+              const uint32_t num_jobs)
+{
+        IMB_JOB *job, jobs[GCM_MAX_JOBS];
+        uint32_t i;
+
+        for (i = 0; i < num_jobs; i++) {
+                job = &jobs[i];
+
+                job->cipher_mode                      = cipher_mode;
+                job->chain_order                      =
+                        (cipher_dir == IMB_DIR_ENCRYPT) ?
+                        IMB_ORDER_CIPHER_HASH :
+                        IMB_ORDER_HASH_CIPHER;
+                job->enc_keys                         = key;
+                job->dec_keys                         = key;
+                job->key_len_in_bytes                 = key_len;
+                job->src                              = in;
+                job->dst                              = out[i];
+                job->msg_len_to_cipher_in_bytes       = len;
+                job->cipher_start_src_offset_in_bytes = UINT64_C(0);
+                job->iv                               = iv;
+                job->iv_len_in_bytes                  = iv_len;
+                job->u.GCM.aad                        = aad;
+                job->u.GCM.aad_len_in_bytes           = aad_len;
+                job->auth_tag_output                  = auth_tag[i];
+                job->auth_tag_output_len_in_bytes     = auth_tag_len;
+                job->cipher_direction                 = cipher_dir;
+                if (cipher_mode == IMB_CIPHER_GCM_SGL) {
+                        job->u.GCM.ctx = ctx[i];
+                        job->sgl_state = sgl_state;
+                        job->hash_alg = IMB_AUTH_GCM_SGL;
+                } else
+                        job->hash_alg = IMB_AUTH_AES_GMAC;
+        }
+
+        const uint32_t completed_jobs =
+                IMB_SUBMIT_BURST(mb_mgr, jobs, num_jobs);
+
+        if (completed_jobs != num_jobs) {
+                int err = imb_get_errno(mb_mgr);
+
+                if (err != 0) {
+                        printf("submit_burst error %d : '%s'\n", err,
+                               imb_get_strerror(err));
+                        return -1;
+                } else {
+                        printf("submit_burst error: not enough "
+                               "jobs returned!\n");
+                        return -1;
+                }
+        }
+
+        for (i = 0; i < num_jobs; i++) {
+                job = &jobs[i];
+
+                if (job->status != IMB_STATUS_COMPLETED) {
+                        printf("job %d status not complete!\n", i+1);
+                       return -1;
+                }
+        }
+
+        return 0;
+}
+
+static int
+burst_aes_gcm_enc(IMB_MGR *p_mgr,
+                  const struct gcm_key_data *key,
+                  struct gcm_context_data **ctx, uint8_t **out,
+                  const uint8_t *in, const uint64_t len,
+                  const uint8_t *iv, const uint64_t iv_len,
+                  const uint8_t *aad, const uint64_t aad_len,
+                  uint8_t **auth_tag, const uint64_t auth_tag_len,
+                  const IMB_KEY_SIZE_BYTES key_len, const uint32_t num_jobs)
+{
+        return aes_gcm_burst(p_mgr, IMB_DIR_ENCRYPT, key,
+                             key_len, out, in, len, iv, iv_len, aad, aad_len,
+                             auth_tag, auth_tag_len, ctx, IMB_CIPHER_GCM, 0,
+                             num_jobs);
+}
+
+static int
+burst_aes_gcm_dec(IMB_MGR *p_mgr,
+                  const struct gcm_key_data *key,
+                  struct gcm_context_data **ctx, uint8_t **out,
+                  const uint8_t *in, const uint64_t len,
+                  const uint8_t *iv, const uint64_t iv_len,
+                  const uint8_t *aad, const uint64_t aad_len,
+                  uint8_t **auth_tag, const uint64_t auth_tag_len,
+                  const IMB_KEY_SIZE_BYTES key_len, const uint32_t num_jobs)
+{
+        return aes_gcm_burst(p_mgr, IMB_DIR_DECRYPT, key,
+                             key_len, out, in, len, iv, iv_len, aad, aad_len,
+                             auth_tag, auth_tag_len, ctx, IMB_CIPHER_GCM, 0,
+                             num_jobs);
+}
+
+static int
+burst_sgl_aes_gcm(IMB_MGR *p_mgr,
+                  IMB_CIPHER_DIRECTION cipher_dir,
+                  const struct gcm_key_data *key,
+                  struct gcm_context_data **ctx, uint8_t **out,
+                  const uint8_t *in, const uint64_t len,
+                  const uint8_t *iv, const uint64_t iv_len,
+                  const uint8_t *aad, const uint64_t aad_len,
+                  uint8_t **auth_tag, const uint64_t auth_tag_len,
+                  const IMB_KEY_SIZE_BYTES key_len, const uint32_t num_jobs)
+{
+        if (aes_gcm_burst(p_mgr, cipher_dir, key,
+                          key_len, out, in, len, iv, iv_len, aad, aad_len,
+                          auth_tag, auth_tag_len, ctx, IMB_CIPHER_GCM_SGL,
+                          IMB_SGL_INIT, num_jobs) < 0)
+                return -1;
+        if (aes_gcm_burst(p_mgr, cipher_dir, key,
+                          key_len, out, in, len, iv, iv_len, aad, aad_len,
+                          auth_tag, auth_tag_len, ctx, IMB_CIPHER_GCM_SGL,
+                          IMB_SGL_UPDATE, num_jobs) < 0)
+                return -1;
+        if (aes_gcm_burst(p_mgr, cipher_dir, key,
+                          key_len, out, in, len, iv, iv_len, aad, aad_len,
+                          auth_tag, auth_tag_len, ctx, IMB_CIPHER_GCM_SGL,
+                          IMB_SGL_COMPLETE, num_jobs) < 0)
+                return -1;
+
+        return 0;
+}
+
+static int
+burst_sgl_aes_gcm_enc(IMB_MGR *p_mgr,
+                      const struct gcm_key_data *key,
+                      struct gcm_context_data **ctx, uint8_t **out,
+                      const uint8_t *in, const uint64_t len,
+                      const uint8_t *iv, const uint64_t iv_len,
+                      const uint8_t *aad, const uint64_t aad_len,
+                      uint8_t **auth_tag, const uint64_t auth_tag_len,
+                      const IMB_KEY_SIZE_BYTES key_len, const uint32_t num_jobs)
+{
+        return burst_sgl_aes_gcm(p_mgr, IMB_DIR_ENCRYPT, key, ctx, out, in,
+                                 len, iv, iv_len, aad, aad_len, auth_tag,
+                                 auth_tag_len, key_len, num_jobs);
+}
+
+static int
+burst_sgl_aes_gcm_dec(IMB_MGR *p_mgr,
+                      const struct gcm_key_data *key,
+                      struct gcm_context_data **ctx, uint8_t **out,
+                      const uint8_t *in, const uint64_t len,
+                      const uint8_t *iv, const uint64_t iv_len,
+                      const uint8_t *aad, const uint64_t aad_len,
+                      uint8_t **auth_tag, const uint64_t auth_tag_len,
+                      const IMB_KEY_SIZE_BYTES key_len, const uint32_t num_jobs)
+{
+        return burst_sgl_aes_gcm(p_mgr, IMB_DIR_DECRYPT, key, ctx, out, in,
+                                 len, iv, iv_len, aad, aad_len, auth_tag,
+                                 auth_tag_len, key_len, num_jobs);
+}
+
+/*****************************************************************************
  * job API
  *****************************************************************************/
 static int
 aes_gcm_job(IMB_MGR *mb_mgr,
             IMB_CIPHER_DIRECTION cipher_dir,
-            const struct gcm_key_data *key,
-            uint64_t key_len,
-            uint8_t *out, const uint8_t *in, uint64_t len,
+            const struct gcm_key_data *key, const uint64_t key_len,
+            uint8_t *out, const uint8_t *in, const uint64_t len,
             const uint8_t *iv, const uint64_t iv_len, const uint8_t *aad,
-            uint64_t aad_len, uint8_t *auth_tag, uint64_t auth_tag_len,
-            struct gcm_context_data *ctx, IMB_CIPHER_MODE cipher_mode,
-            IMB_SGL_STATE sgl_state)
+            const uint64_t aad_len, uint8_t *auth_tag,
+            const uint64_t auth_tag_len, struct gcm_context_data *ctx,
+            const IMB_CIPHER_MODE cipher_mode, const IMB_SGL_STATE sgl_state)
 {
         IMB_JOB *job;
 
@@ -1679,12 +1856,10 @@ aes_gcm_job(IMB_MGR *mb_mgr,
 static int
 job_aes_gcm_enc(IMB_MGR *p_mgr,
                 const struct gcm_key_data *key,
-                struct gcm_context_data *ctx,
-                uint8_t *out, const uint8_t *in, uint64_t len,
-                const uint8_t *iv, const uint64_t iv_len,
-                const uint8_t *aad, uint64_t aad_len,
-                uint8_t *auth_tag, uint64_t auth_tag_len,
-                IMB_KEY_SIZE_BYTES key_len)
+                struct gcm_context_data *ctx, uint8_t *out, const uint8_t *in,
+                const uint64_t len, const uint8_t *iv, const uint64_t iv_len,
+                const uint8_t *aad, const uint64_t aad_len, uint8_t *auth_tag,
+                const uint64_t auth_tag_len, const IMB_KEY_SIZE_BYTES key_len)
 {
         return aes_gcm_job(p_mgr, IMB_DIR_ENCRYPT, key,
                            key_len, out, in, len, iv, iv_len, aad, aad_len,
@@ -1694,12 +1869,10 @@ job_aes_gcm_enc(IMB_MGR *p_mgr,
 static int
 job_aes_gcm_dec(IMB_MGR *p_mgr,
                 const struct gcm_key_data *key,
-                struct gcm_context_data *ctx,
-                uint8_t *out, const uint8_t *in, uint64_t len,
-                const uint8_t *iv, const uint64_t iv_len,
-                const uint8_t *aad, uint64_t aad_len,
-                uint8_t *auth_tag, uint64_t auth_tag_len,
-                IMB_KEY_SIZE_BYTES key_len)
+                struct gcm_context_data *ctx, uint8_t *out, const uint8_t *in,
+                const uint64_t len, const uint8_t *iv, const uint64_t iv_len,
+                const uint8_t *aad, const uint64_t aad_len, uint8_t *auth_tag,
+                const uint64_t auth_tag_len, const IMB_KEY_SIZE_BYTES key_len)
 {
         return aes_gcm_job(p_mgr, IMB_DIR_DECRYPT, key,
                            key_len, out, in, len, iv, iv_len, aad, aad_len,
@@ -1707,26 +1880,27 @@ job_aes_gcm_dec(IMB_MGR *p_mgr,
 }
 
 static int
-job_sgl_aes_gcm_enc(IMB_MGR *p_mgr,
-                    const struct gcm_key_data *key,
-                    struct gcm_context_data *ctx,
-                    uint8_t *out, const uint8_t *in, uint64_t len,
-                    const uint8_t *iv, const uint64_t iv_len,
-                    const uint8_t *aad, uint64_t aad_len,
-                    uint8_t *auth_tag, uint64_t auth_tag_len,
-                    IMB_KEY_SIZE_BYTES key_len)
+job_sgl_aes_gcm(IMB_MGR *p_mgr,
+                const IMB_CIPHER_DIRECTION cipher_dir,
+                const struct gcm_key_data *key,
+                struct gcm_context_data *ctx, uint8_t *out,
+                const uint8_t *in, const uint64_t len,
+                const uint8_t *iv, const uint64_t iv_len,
+                const uint8_t *aad, const uint64_t aad_len,
+                uint8_t *auth_tag, const uint64_t auth_tag_len,
+                const IMB_KEY_SIZE_BYTES key_len)
 {
-        if (aes_gcm_job(p_mgr, IMB_DIR_ENCRYPT, key,
+        if (aes_gcm_job(p_mgr, cipher_dir, key,
                         key_len, out, in, len, iv, iv_len, aad, aad_len,
                         auth_tag, auth_tag_len, ctx, IMB_CIPHER_GCM_SGL,
                         IMB_SGL_INIT) < 0)
                 return -1;
-        if (aes_gcm_job(p_mgr, IMB_DIR_ENCRYPT, key,
+        if (aes_gcm_job(p_mgr, cipher_dir, key,
                         key_len, out, in, len, iv, iv_len, aad, aad_len,
                         auth_tag, auth_tag_len, ctx, IMB_CIPHER_GCM_SGL,
                         IMB_SGL_UPDATE) < 0)
                 return -1;
-        if (aes_gcm_job(p_mgr, IMB_DIR_ENCRYPT, key,
+        if (aes_gcm_job(p_mgr, cipher_dir, key,
                         key_len, out, in, len, iv, iv_len, aad, aad_len,
                         auth_tag, auth_tag_len, ctx, IMB_CIPHER_GCM_SGL,
                         IMB_SGL_COMPLETE) < 0)
@@ -1735,31 +1909,83 @@ job_sgl_aes_gcm_enc(IMB_MGR *p_mgr,
 }
 
 static int
+aes_gcm_single_job_sgl(IMB_MGR *mb_mgr,
+                       IMB_CIPHER_DIRECTION cipher_dir,
+                       const struct gcm_key_data *key,
+                       const uint64_t key_len,
+                       struct IMB_SGL_IOV *sgl_segs,
+                       const unsigned num_sgl_segs,
+                       const uint8_t *iv, const uint64_t iv_len,
+                       const uint8_t *aad, const uint64_t aad_len,
+                       uint8_t *auth_tag, const uint64_t auth_tag_len,
+                       struct gcm_context_data *ctx)
+{
+        IMB_JOB *job;
+
+        job = IMB_GET_NEXT_JOB(mb_mgr);
+        if (!job) {
+                fprintf(stderr, "failed to get job\n");
+                return -1;
+        }
+
+        job->cipher_mode = IMB_CIPHER_GCM_SGL;
+        job->cipher_direction = cipher_dir;
+        job->hash_alg = IMB_AUTH_GCM_SGL;
+        job->chain_order                      =
+                (cipher_dir == IMB_DIR_ENCRYPT) ? IMB_ORDER_CIPHER_HASH :
+                                                  IMB_ORDER_HASH_CIPHER;
+        job->enc_keys             = key;
+        job->dec_keys             = key;
+        job->key_len_in_bytes             = key_len;
+        job->num_sgl_io_segs                  = num_sgl_segs;
+        job->sgl_io_segs                      = sgl_segs;
+        job->cipher_start_src_offset_in_bytes = UINT64_C(0);
+        job->iv                               = iv;
+        job->iv_len_in_bytes                  = iv_len;
+        job->u.GCM.aad                        = aad;
+        job->u.GCM.aad_len_in_bytes           = aad_len;
+        job->auth_tag_output                  = auth_tag;
+        job->auth_tag_output_len_in_bytes     = auth_tag_len;
+        job->u.GCM.ctx = ctx;
+        job->sgl_state = IMB_SGL_ALL;
+        job = IMB_SUBMIT_JOB(mb_mgr);
+
+        if (job->status != IMB_STATUS_COMPLETED) {
+                fprintf(stderr, "failed job, status:%d\n", job->status);
+                return -1;
+        }
+
+        return 0;
+}
+
+static int
+job_sgl_aes_gcm_enc(IMB_MGR *p_mgr,
+                    const struct gcm_key_data *key,
+                    struct gcm_context_data *ctx,
+                    uint8_t *out, const uint8_t *in, const uint64_t len,
+                    const uint8_t *iv, const uint64_t iv_len,
+                    const uint8_t *aad, const uint64_t aad_len,
+                    uint8_t *auth_tag, const uint64_t auth_tag_len,
+                    const IMB_KEY_SIZE_BYTES key_len)
+{
+        return job_sgl_aes_gcm(p_mgr, IMB_DIR_ENCRYPT, key, ctx,
+                               out, in, len, iv, iv_len, aad, aad_len,
+                               auth_tag, auth_tag_len, key_len);
+}
+
+static int
 job_sgl_aes_gcm_dec(IMB_MGR *p_mgr,
                     const struct gcm_key_data *key,
                     struct gcm_context_data *ctx,
-                    uint8_t *out, const uint8_t *in, uint64_t len,
+                    uint8_t *out, const uint8_t *in, const uint64_t len,
                     const uint8_t *iv, const uint64_t iv_len,
-                    const uint8_t *aad, uint64_t aad_len,
-                    uint8_t *auth_tag, uint64_t auth_tag_len,
-                    IMB_KEY_SIZE_BYTES key_len)
+                    const uint8_t *aad, const uint64_t aad_len,
+                    uint8_t *auth_tag, const uint64_t auth_tag_len,
+                    const IMB_KEY_SIZE_BYTES key_len)
 {
-        if (aes_gcm_job(p_mgr, IMB_DIR_DECRYPT, key,
-                        key_len, out, in, len, iv, iv_len, aad, aad_len,
-                        auth_tag, auth_tag_len, ctx, IMB_CIPHER_GCM_SGL,
-                        IMB_SGL_INIT) < 0)
-                return -1;
-        if (aes_gcm_job(p_mgr, IMB_DIR_DECRYPT, key,
-                        key_len, out, in, len, iv, iv_len, aad, aad_len,
-                        auth_tag, auth_tag_len, ctx, IMB_CIPHER_GCM_SGL,
-                        IMB_SGL_UPDATE) < 0)
-                return -1;
-        if (aes_gcm_job(p_mgr, IMB_DIR_DECRYPT, key,
-                        key_len, out, in, len, iv, iv_len, aad, aad_len,
-                        auth_tag, auth_tag_len, ctx, IMB_CIPHER_GCM_SGL,
-                        IMB_SGL_COMPLETE) < 0)
-                return -1;
-        return 0;
+        return job_sgl_aes_gcm(p_mgr, IMB_DIR_DECRYPT, key, ctx,
+                               out, in, len, iv, iv_len, aad, aad_len,
+                               auth_tag, auth_tag_len, key_len);
 }
 
 /*****************************************************************************/
@@ -1917,6 +2143,165 @@ test_gcm_vectors(struct gcm_ctr_vector const *vector,
 }
 
 static void
+test_gcm_vectors_burst(struct gcm_ctr_vector const *vector,
+                       gcm_enc_dec_many_fn_t encfn,
+                       gcm_enc_dec_many_fn_t decfn,
+                       struct test_suite_context *ts)
+{
+	struct gcm_key_data gdata_key;
+	int is_error = 0;
+	/* Temporary array for the calculated vectors */
+        struct gcm_context_data **gdata_ctx = NULL;
+	uint8_t **ct_test = NULL;
+	uint8_t **pt_test = NULL;
+	uint8_t **T_test = NULL;
+        const uint8_t *iv = vector->IV;
+        uint64_t iv_len = vector->IVlen;
+        uint32_t i, j, num_jobs = GCM_MAX_JOBS;
+
+        /* Allocate space for the calculated ciphertext */
+        ct_test = malloc(num_jobs * sizeof(void *));
+        if (ct_test == NULL) {
+                fprintf(stderr, "Can't allocate ciphertext memory\n");
+                goto test_gcm_vectors_burst_exit;
+        }
+        memset(ct_test, 0, num_jobs * sizeof(void *));
+
+        /* Allocate space for the calculated plaintext */
+        pt_test = malloc(num_jobs * sizeof(void *));
+        if (pt_test == NULL) {
+                fprintf(stderr, "Can't allocate plaintext memory\n");
+                goto test_gcm_vectors_burst_exit;
+        }
+        memset(pt_test, 0, num_jobs * sizeof(void *));
+
+        /* Allocate space for the GCM context data */
+        gdata_ctx = malloc(num_jobs * sizeof(void *));
+        if (gdata_ctx == NULL) {
+                fprintf(stderr, "Can't allocate GCM ctx memory\n");
+                goto test_gcm_vectors_burst_exit;
+        }
+        memset(gdata_ctx, 0, num_jobs * sizeof(void *));
+
+        /* Allocate space for the calculated tag */
+	T_test = malloc(num_jobs * sizeof(void *));
+	if (T_test == NULL) {
+		fprintf(stderr, "Can't allocate tag memory\n");
+                goto test_gcm_vectors_burst_exit;
+	}
+        memset(T_test, 0, num_jobs * sizeof(void *));
+
+        /* Zero buffers */
+        for (i = 0; i < num_jobs; i++) {
+                if (vector->Plen != 0) {
+                        ct_test[i] = malloc(vector->Plen);
+                        if (ct_test[i] == NULL)
+                                goto test_gcm_vectors_burst_exit;
+                        memset(ct_test[i], 0, vector->Plen);
+
+                        pt_test[i] = malloc(vector->Plen);
+                        if (pt_test[i] == NULL)
+                                goto test_gcm_vectors_burst_exit;
+                        memset(pt_test[i], 0, vector->Plen);
+                }
+
+                gdata_ctx[i] = malloc(sizeof(struct gcm_context_data));
+                if (gdata_ctx[i] == NULL)
+                        goto test_gcm_vectors_burst_exit;
+                memset(gdata_ctx[i], 0, sizeof(struct gcm_context_data));
+
+                T_test[i] = malloc(vector->Tlen);
+                if (T_test[i] == NULL)
+                        goto test_gcm_vectors_burst_exit;
+                memset(T_test[i], 0, vector->Tlen);
+        }
+
+	/* This is only required once for a given key */
+        switch (vector->Klen) {
+        case IMB_KEY_128_BYTES:
+                IMB_AES128_GCM_PRE(p_gcm_mgr, vector->K, &gdata_key);
+                break;
+        case IMB_KEY_192_BYTES:
+                IMB_AES192_GCM_PRE(p_gcm_mgr, vector->K, &gdata_key);
+                break;
+        case IMB_KEY_256_BYTES:
+        default:
+                IMB_AES256_GCM_PRE(p_gcm_mgr, vector->K, &gdata_key);
+                break;
+        }
+
+        /* Test encrypt and decrypt */
+        for (i = 0; i < num_jobs; i++) {
+                /*
+                 * Encrypt
+                 */
+                is_error = encfn(p_gcm_mgr, &gdata_key, gdata_ctx,
+                                 ct_test, vector->P, vector->Plen,
+                                 iv, iv_len, vector->A,
+                                 vector->Alen, T_test, vector->Tlen,
+                                 vector->Klen, i + 1);
+
+                for (j = 0; j <= i; j++) {
+                        is_error |= check_data(ct_test[j], vector->C,
+                                               vector->Plen,
+                                               "encrypted cipher text (burst)");
+                        is_error |= check_data(T_test[j], vector->T,
+                                               vector->Tlen, "tag (burst)");
+                }
+                if (is_error)
+                        test_suite_update(ts, 0, 1);
+                else
+                        test_suite_update(ts, 1, 0);
+                /*
+                 * Decrypt
+                 */
+                is_error = decfn(p_gcm_mgr, &gdata_key, gdata_ctx, pt_test,
+                                 vector->C, vector->Plen, iv, iv_len, vector->A,
+                                 vector->Alen, T_test, vector->Tlen,
+                                 vector->Klen, i + 1);
+
+                for (j = 0; j <= i; j++) {
+                        is_error |= check_data(pt_test[j], vector->P,
+                                               vector->Plen,
+                                               "decrypted plain text (burst)");
+                        /*
+                         * GCM decryption outputs a 16 byte tag value
+                         * that must be verified against the expected tag value
+                         */
+                        is_error |= check_data(T_test[j], vector->T,
+                                               vector->Tlen,
+                                               "decrypted tag (burst)");
+                }
+                if (is_error)
+                        test_suite_update(ts, 0, 1);
+                else
+                        test_suite_update(ts, 1, 0);
+        }
+
+ test_gcm_vectors_burst_exit:
+        if (NULL != ct_test) {
+                for (i = 0; i < num_jobs; i++)
+                        free(ct_test[i]);
+		free(ct_test);
+        }
+	if (NULL != pt_test) {
+                for (i = 0; i < num_jobs; i++)
+                        free(pt_test[i]);
+                free(pt_test);
+        }
+        if (NULL != gdata_ctx) {
+                for (i = 0; i < num_jobs; i++)
+                        free(gdata_ctx[i]);
+                free(gdata_ctx);
+        }
+	if (NULL != T_test) {
+                for (i = 0; i < num_jobs; i++)
+                        free(T_test[i]);
+		free(T_test);
+        }
+}
+
+static void
 test_gcm_std_vectors(struct test_suite_context *ts128,
                      struct test_suite_context *ts192,
                      struct test_suite_context *ts256,
@@ -1952,6 +2337,10 @@ test_gcm_std_vectors(struct test_suite_context *ts128,
                                                  job_sgl_aes_gcm_enc,
                                                  job_sgl_aes_gcm_dec,
                                                  ts128);
+                                test_gcm_vectors_burst(&vectors[vect],
+                                                       burst_sgl_aes_gcm_enc,
+                                                       burst_sgl_aes_gcm_dec,
+                                                       ts128);
                         } else {
                                 test_gcm_vectors(&vectors[vect],
                                                  aes_gcm_enc,
@@ -1961,6 +2350,10 @@ test_gcm_std_vectors(struct test_suite_context *ts128,
                                                  job_aes_gcm_enc,
                                                  job_aes_gcm_dec,
                                                  ts128);
+                                test_gcm_vectors_burst(&vectors[vect],
+                                                       burst_aes_gcm_enc,
+                                                       burst_aes_gcm_dec,
+                                                       ts128);
                         }
                         break;
                 case IMB_KEY_192_BYTES:
@@ -1973,6 +2366,10 @@ test_gcm_std_vectors(struct test_suite_context *ts128,
                                                  job_sgl_aes_gcm_enc,
                                                  job_sgl_aes_gcm_dec,
                                                  ts192);
+                                test_gcm_vectors_burst(&vectors[vect],
+                                                       burst_sgl_aes_gcm_enc,
+                                                       burst_sgl_aes_gcm_dec,
+                                                       ts192);
                         } else {
                                 test_gcm_vectors(&vectors[vect],
                                                  aes_gcm_enc,
@@ -1982,6 +2379,10 @@ test_gcm_std_vectors(struct test_suite_context *ts128,
                                                  job_aes_gcm_enc,
                                                  job_aes_gcm_dec,
                                                  ts192);
+                                test_gcm_vectors_burst(&vectors[vect],
+                                                       burst_aes_gcm_enc,
+                                                       burst_aes_gcm_dec,
+                                                       ts192);
                         }
                         break;
                 case IMB_KEY_256_BYTES:
@@ -1994,6 +2395,11 @@ test_gcm_std_vectors(struct test_suite_context *ts128,
                                                  job_sgl_aes_gcm_enc,
                                                  job_sgl_aes_gcm_dec,
                                                  ts256);
+                                test_gcm_vectors_burst(&vectors[vect],
+                                                       burst_sgl_aes_gcm_enc,
+                                                       burst_sgl_aes_gcm_dec,
+                                                       ts256);
+
                         } else {
                                 test_gcm_vectors(&vectors[vect],
                                                  aes_gcm_enc,
@@ -2003,6 +2409,11 @@ test_gcm_std_vectors(struct test_suite_context *ts128,
                                                  job_aes_gcm_enc,
                                                  job_aes_gcm_dec,
                                                  ts256);
+                                test_gcm_vectors_burst(&vectors[vect],
+                                                 burst_aes_gcm_enc,
+                                                 burst_aes_gcm_dec,
+                                                 ts256);
+
                         }
                         break;
                 default:
@@ -2014,12 +2425,13 @@ test_gcm_std_vectors(struct test_suite_context *ts128,
 }
 
 static void
-test_ghash(struct test_suite_context *ts)
+test_ghash(struct test_suite_context *ts, const int use_job_api)
 {
 	const int vectors_cnt = DIM(ghash_vectors);
 	int vect;
 
-	printf("GHASH test vectors:\n");
+	printf("GHASH test vectors (%s API):\n",
+               use_job_api ? "job" : "direct");
 	for (vect = 0; vect < vectors_cnt; vect++) {
 	        struct gcm_key_data gdata_key;
                 struct gcm_ctr_vector const *vector = &ghash_vectors[vect];
@@ -2028,8 +2440,44 @@ test_ghash(struct test_suite_context *ts)
                 memset(&gdata_key, 0, sizeof(struct gcm_key_data));
                 memset(T_test, 0, sizeof(T_test));
                 IMB_GHASH_PRE(p_gcm_mgr, vector->K, &gdata_key);
-                IMB_GHASH(p_gcm_mgr, &gdata_key, vector->P, vector->Plen,
-                          T_test, vector->Tlen);
+
+                if (!use_job_api) {
+                        IMB_GHASH(p_gcm_mgr, &gdata_key, vector->P,
+                                  vector->Plen, T_test, vector->Tlen);
+                } else {
+                        IMB_JOB *job = IMB_GET_NEXT_JOB(p_gcm_mgr);
+
+                        if (!job) {
+                                fprintf(stderr,
+                                        "failed to get job for ghash\n");
+                                return;
+                        }
+
+                        job->cipher_mode = IMB_CIPHER_NULL;
+                        job->hash_alg = IMB_AUTH_GHASH;
+                        job->u.GHASH._key = &gdata_key;
+                        job->u.GHASH._init_tag = T_test;
+                        job->src = vector->P;
+                        job->msg_len_to_hash_in_bytes = vector->Plen;
+                        job->hash_start_src_offset_in_bytes = UINT64_C(0);
+                        job->auth_tag_output = T_test;
+                        job->auth_tag_output_len_in_bytes = vector->Tlen;
+
+                        job = IMB_SUBMIT_JOB(p_gcm_mgr);
+                        while (job) {
+                                if (job->status != IMB_STATUS_COMPLETED)
+                                        fprintf(stderr,
+                                                "failed job, status:%d\n",
+                                                job->status);
+                                job = IMB_GET_COMPLETED_JOB(p_gcm_mgr);
+                        }
+                        while ((job = IMB_FLUSH_JOB(p_gcm_mgr)) != NULL) {
+                                if (job->status != IMB_STATUS_COMPLETED)
+                                        fprintf(stderr,
+                                                "failed job, status:%d\n",
+                                                job->status);
+                        }
+                }
 
 	        if (check_data(T_test, vector->T, vector->Tlen,
                                "generated tag (T)"))
@@ -2223,6 +2671,157 @@ test_gmac(struct test_suite_context *ts128,
 }
 
 static void
+test_single_job_sgl(struct IMB_MGR *mb_mgr,
+                    struct test_suite_context *ctx,
+                    const uint32_t key_sz,
+                    const uint32_t buffer_sz,
+                    const uint32_t seg_sz,
+                    const IMB_CIPHER_DIRECTION cipher_dir)
+{
+        uint8_t *in_buffer = NULL;
+        uint8_t **segments = NULL;
+        uint8_t linear_digest[DIGEST_SZ];
+        uint8_t sgl_digest[DIGEST_SZ];
+        uint8_t k[MAX_KEY_SZ];
+        unsigned int i;
+        uint8_t aad[AAD_SZ];
+        uint8_t iv[IV_SZ];
+        struct gcm_context_data gcm_ctx;
+        struct gcm_key_data key;
+        uint32_t last_seg_sz = buffer_sz % seg_sz;
+        struct IMB_SGL_IOV *sgl_segs = NULL;
+        const uint32_t num_segments = DIV_ROUND_UP(buffer_sz, seg_sz);
+
+        if (last_seg_sz == 0)
+                last_seg_sz = seg_sz;
+
+        sgl_segs = malloc(sizeof(struct IMB_SGL_IOV) * num_segments);
+
+        in_buffer = malloc(buffer_sz);
+        if (in_buffer == NULL) {
+                fprintf(stderr, "Could not allocate memory for input buffer\n");
+                test_suite_update(ctx, 0, 1);
+                goto exit;
+        }
+
+        /*
+         * Initialize tags with different values, to make sure the comparison
+         * is false if they are not updated by the library
+         */
+        memset(sgl_digest, 0, DIGEST_SZ);
+        memset(linear_digest, 0xFF, DIGEST_SZ);
+
+        generate_random_buf(in_buffer, buffer_sz);
+        generate_random_buf(k, key_sz);
+        generate_random_buf(iv, IV_SZ);
+        generate_random_buf(aad, AAD_SZ);
+
+        if (key_sz == IMB_KEY_128_BYTES)
+                IMB_AES128_GCM_PRE(mb_mgr, k, &key);
+        else if (key_sz == IMB_KEY_192_BYTES)
+                IMB_AES192_GCM_PRE(mb_mgr, k, &key);
+        else /* key_sz == 32 */
+                IMB_AES256_GCM_PRE(mb_mgr, k, &key);
+
+        segments = malloc(num_segments * sizeof(*segments));
+        if (segments == NULL) {
+                fprintf(stderr,
+                        "Could not allocate memory for segments array\n");
+                test_suite_update(ctx, 0, 1);
+                goto exit;
+        }
+        memset(segments, 0, num_segments * sizeof(*segments));
+
+        for (i = 0; i < (num_segments - 1); i++) {
+                segments[i] = malloc(seg_sz);
+                if (segments[i] == NULL) {
+                        fprintf(stderr,
+                                "Could not allocate memory for segment %u\n",
+                                i);
+                        test_suite_update(ctx, 0, 1);
+                        goto exit;
+                }
+                memcpy(segments[i], in_buffer + seg_sz * i, seg_sz);
+                sgl_segs[i].in = segments[i];
+                sgl_segs[i].out = segments[i];
+                sgl_segs[i].len = seg_sz;
+        }
+        segments[i] = malloc(last_seg_sz);
+        if (segments[i] == NULL) {
+                fprintf(stderr, "Could not allocate memory for segment %u\n",
+                        i);
+                test_suite_update(ctx, 0, 1);
+                goto exit;
+        }
+        memcpy(segments[i], in_buffer + seg_sz * i, last_seg_sz);
+        sgl_segs[i].in = segments[i];
+        sgl_segs[i].out = segments[i];
+        sgl_segs[i].len = last_seg_sz;
+
+        /* Process linear (single segment) buffer */
+        if (aes_gcm_job(mb_mgr, cipher_dir, &key, key_sz,
+                        in_buffer, in_buffer, buffer_sz, iv, IV_SZ, aad, AAD_SZ,
+                        linear_digest, DIGEST_SZ,
+                        &gcm_ctx, IMB_CIPHER_GCM, 0) < 0) {
+                test_suite_update(ctx, 0, 1);
+                goto exit;
+        } else
+                test_suite_update(ctx, 1, 0);
+
+        /* Process multi-segment buffer */
+        aes_gcm_single_job_sgl(mb_mgr, cipher_dir, &key, key_sz,
+                       sgl_segs, num_segments,
+                       iv, IV_SZ, aad, AAD_SZ,
+                       sgl_digest, DIGEST_SZ, &gcm_ctx);
+
+        for (i = 0; i < (num_segments - 1); i++) {
+                if (memcmp(in_buffer + i*seg_sz, segments[i],
+                           seg_sz) != 0) {
+                        printf("ciphertext mismatched "
+                               "in segment number %u "
+                               "(segment size = %u)\n",
+                               i, seg_sz);
+                        hexdump(stderr, "Expected output",
+                                in_buffer + i*seg_sz, seg_sz);
+                        hexdump(stderr, "SGL output", segments[i],
+                                seg_sz);
+                        test_suite_update(ctx, 0, 1);
+                        goto exit;
+                }
+        }
+        /* Check last segment */
+        if (memcmp(in_buffer + i*seg_sz, segments[i],
+                   last_seg_sz) != 0) {
+                printf("ciphertext mismatched "
+                       "in segment number %u (segment size = %u)\n",
+                       i, seg_sz);
+                hexdump(stderr, "Expected output",
+                        in_buffer + i*seg_sz, last_seg_sz);
+                hexdump(stderr, "SGL output", segments[i], last_seg_sz);
+                test_suite_update(ctx, 0, 1);
+        }
+        if (memcmp(sgl_digest, linear_digest, 16) != 0) {
+                printf("hash mismatched (segment size = %u)\n",
+                       seg_sz);
+                hexdump(stderr, "Expected digest",
+                        linear_digest, DIGEST_SZ);
+                hexdump(stderr, "SGL digest", sgl_digest, DIGEST_SZ);
+                test_suite_update(ctx, 0, 1);
+        } else {
+                test_suite_update(ctx, 1, 0);
+        }
+
+exit:
+        free(sgl_segs);
+        free(in_buffer);
+        if (segments != NULL) {
+                for (i = 0; i < num_segments; i++)
+                        free(segments[i]);
+                free(segments);
+        }
+}
+
+static void
 test_sgl(struct IMB_MGR *mb_mgr,
          struct test_suite_context *ctx,
          const uint32_t key_sz,
@@ -2275,16 +2874,16 @@ test_sgl(struct IMB_MGR *mb_mgr,
         else /* key_sz == 32 */
                 IMB_AES256_GCM_PRE(mb_mgr, k, &key);
 
-        segments = malloc(num_segments * 8);
+        segments = malloc(num_segments * sizeof(*segments));
         if (segments == NULL) {
                 fprintf(stderr,
                         "Could not allocate memory for segments array\n");
                 test_suite_update(ctx, 0, 1);
                 goto exit;
         }
-        memset(segments, 0, num_segments * 8);
+        memset(segments, 0, num_segments * sizeof(*segments));
 
-        segment_sizes = malloc(num_segments * 4);
+        segment_sizes = malloc(num_segments * sizeof(*segment_sizes));
         if (segment_sizes == NULL) {
                 fprintf(stderr,
                         "Could not allocate memory for array of sizes\n");
@@ -2503,6 +3102,11 @@ int gcm_test(IMB_MGR *p_mgr)
                                  IMB_DIR_ENCRYPT, 1);
                         test_sgl(p_mgr, ctx, key_sz, buf_sz, seg_sz,
                                  IMB_DIR_DECRYPT, 1);
+                        /* Single job SGL API */
+                        test_single_job_sgl(p_mgr, ctx, key_sz, buf_sz, seg_sz,
+                                            IMB_DIR_ENCRYPT);
+                        test_single_job_sgl(p_mgr, ctx, key_sz, buf_sz, seg_sz,
+                                            IMB_DIR_DECRYPT);
                         /* Direct API */
                         test_sgl(p_mgr, ctx, key_sz, buf_sz, seg_sz,
                                  IMB_DIR_ENCRYPT, 0);
@@ -2524,7 +3128,8 @@ int gcm_test(IMB_MGR *p_mgr)
         errors += test_suite_end(&ts256);
 
         test_suite_start(&ts128, "GHASH");
-        test_ghash(&ts128);
+        test_ghash(&ts128, 0);
+        test_ghash(&ts128, 1);
         errors += test_suite_end(&ts128);
 
 	return errors;

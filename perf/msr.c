@@ -1,5 +1,5 @@
 /**********************************************************************
-  Copyright(c) 2018-2021 Intel Corporation All rights reserved.
+  Copyright(c) 2018-2022 Intel Corporation All rights reserved.
 
   Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions
@@ -54,6 +54,7 @@
 static int *m_msr_fd = NULL;           /**< MSR driver file descriptors table */
 static unsigned m_maxcores = 0;        /**< max number of cores (size of the
                                           table above too) */
+#ifdef _WIN32
 #ifdef WIN_MSR
 union msr_data {
         uint64_t ui64;
@@ -99,6 +100,7 @@ deInitMSRdriver(void)
         hOpenLibSys = NULL;
 }
 #endif /* WIN_MSR */
+#endif /* _WIN32 */
 
 int
 machine_init(const unsigned max_core_id)

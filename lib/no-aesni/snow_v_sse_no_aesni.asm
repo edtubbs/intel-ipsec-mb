@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2021, Intel Corporation
+;; Copyright (c) 2021-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -28,4 +28,4 @@
 %include "include/aesni_emu.inc"
 %define SNOW_V snow_v_sse_no_aesni
 %define SNOW_V_AEAD_INIT snow_v_aead_init_sse_no_aesni
-%include "sse/snow_v_sse.asm"
+%include "sse_t1/snow_v_sse.asm"

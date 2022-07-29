@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2012-2021, Intel Corporation
+;; Copyright (c) 2012-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -30,6 +30,7 @@
 ; XMM registers are clobbered. Saving/restoring must be done at a higher level
 %include "include/os.asm"
 %include "include/clear_regs.asm"
+%include "include/cet.inc"
 
 %define CONCAT(a,b) a %+ b
 %define VMOVDQ vmovdqu
@@ -230,6 +231,7 @@ mksection .text
 ;; aes_cbc_dec_192_avx(void *in, void *IV, void *keys, void *out, UINT64 num_bytes)
 MKGLOBAL(aes_cbc_dec_192_avx,function,internal)
 aes_cbc_dec_192_avx:
+        endbranch64
 %ifndef LINUX
 	mov	num_bytes, [rsp + 8*5]
 %endif

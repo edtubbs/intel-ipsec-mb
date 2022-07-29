@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2020-2021, Intel Corporation
+;; Copyright (c) 2020-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -29,4 +29,4 @@
 %define CRC32_LTE24A_FN     crc24_lte_a_sse_no_aesni
 %define CRC32_LTE24B_FN     crc24_lte_b_sse_no_aesni
 %define CRC32_FN            crc32_by8_sse_no_aesni
-%include "sse/crc32_lte_sse.asm"
+%include "sse_t1/crc32_lte_sse.asm"

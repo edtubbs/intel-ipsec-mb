@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2012-2021, Intel Corporation
+;; Copyright (c) 2012-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -116,6 +116,7 @@ endstruc
 ; arg 2 : job
 MKGLOBAL(FLUSH_JOB_AES_ENC,function,internal)
 FLUSH_JOB_AES_ENC:
+        endbranch64
 
         mov	rax, rsp
         sub	rsp, STACK_size

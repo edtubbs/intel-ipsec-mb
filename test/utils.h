@@ -1,5 +1,5 @@
 /*****************************************************************************
- Copyright (c) 2018-2021, Intel Corporation
+ Copyright (c) 2018-2022, Intel Corporation
 
  Redistribution and use in source and binary forms, with or without
  modification, are permitted provided that the following conditions are met:
@@ -28,9 +28,11 @@
 #ifndef TESTAPP_UTILS_H
 #define TESTAPP_UTILS_H
 
+#include <stdio.h>
 #include <intel-ipsec-mb.h>
 
 #define DIM(_x) (sizeof(_x)/sizeof(_x[0]))
+#define DIV_ROUND_UP(x, y) ((x + y - 1) / y)
 
 void hexdump(FILE *fp, const char *msg, const void *p, size_t len);
 void hexdump_ex(FILE *fp, const char *msg, const void *p, size_t len,
@@ -55,7 +57,7 @@ int test_suite_end(struct test_suite_context *ctx);
 void generate_random_buf(uint8_t *buf, const uint32_t length);
 
 int membitcmp(const uint8_t *input, const uint8_t *output,
-              const uint32_t bitoffset, const uint32_t bitlength);
+              const uint32_t bitlength, const uint32_t bitoffset);
 void memory_copy(void *dst, const void *src, size_t length);
 void memory_set(void *dst, const int val, size_t length);
 

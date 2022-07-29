@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2021, Intel Corporation
+;; Copyright (c) 2021-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -29,7 +29,10 @@
 %define _CET_INC_
 
 %macro endbranch64 0
-db 0xf3, 0x0f, 0x1e, 0xfa
+       ;; generate enbranch64 opcode only for Linux/FreeBSD
+%ifdef LINUX
+       db 0xf3, 0x0f, 0x1e, 0xfa
+%endif
 %endmacro
 
 %endif ; _CET_INC_

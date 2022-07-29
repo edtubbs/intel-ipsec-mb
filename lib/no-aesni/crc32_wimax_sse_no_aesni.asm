@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2020-2021, Intel Corporation
+;; Copyright (c) 2020-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -29,4 +29,4 @@
 %define CRC32_WIMAX_DATA_FN crc32_wimax_ofdma_data_sse_no_aesni
 %define CRC8_WIMAX_HCS_FN   crc8_wimax_ofdma_hcs_sse_no_aesni
 %define CRC32_FN            crc32_by8_sse_no_aesni
-%include "sse/crc32_wimax_sse.asm"
+%include "sse_t1/crc32_wimax_sse.asm"

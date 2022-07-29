@@ -1,5 +1,5 @@
 /*******************************************************************************
-  Copyright (c) 2012-2021, Intel Corporation
+  Copyright (c) 2012-2022, Intel Corporation
 
   Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions are met:
@@ -28,11 +28,14 @@
 
 #include <stdio.h>
 #include "intel-ipsec-mb.h"
-
-#include "noaesni.h"
-#include "asm.h"
+#ifdef AESNI_EMU
+#include "include/noaesni.h"
+#endif
 #include "include/clear_regs_mem.h"
 #include "include/error.h"
+#include "include/arch_noaesni.h"
+#include "include/arch_sse_type1.h"
+#include "include/arch_avx_type1.h"
 
 static uint32_t in[4*3] = {
         0x01010101, 0x01010101, 0x01010101, 0x01010101,
@@ -67,6 +70,7 @@ aes_xcbc_expand_key_sse(const void *key, void *k1_exp, void *k2, void *k3)
 #endif
 }
 
+#ifdef AESNI_EMU
 void
 aes_xcbc_expand_key_sse_no_aesni(const void *key, void *k1_exp,
                                  void *k2, void *k3)
@@ -94,6 +98,7 @@ aes_xcbc_expand_key_sse_no_aesni(const void *key, void *k1_exp,
         clear_mem(&keys_exp_enc, sizeof(keys_exp_enc));
 #endif
 }
+#endif /* AESNI_EMU */
 
 __forceinline
 void

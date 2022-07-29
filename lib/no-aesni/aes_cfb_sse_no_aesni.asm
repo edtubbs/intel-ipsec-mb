@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2018-2021, Intel Corporation
+;; Copyright (c) 2018-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -28,4 +28,4 @@
 %include "include/aesni_emu.inc"
 %define AES_CFB_128_ONE aes_cfb_128_one_sse_no_aesni
 %define AES_CFB_256_ONE aes_cfb_256_one_sse_no_aesni
-%include "sse/aes_cfb_sse.asm"
+%include "sse_t1/aes_cfb_sse.asm"

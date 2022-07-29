@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2012-2021, Intel Corporation
+# Copyright (c) 2012-2022, Intel Corporation
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
@@ -28,6 +28,7 @@
 TEST_APP := ipsec_MB_testapp
 XVALID_APP := ipsec_xvalid_test
 FUZZ_APP := job_api_fuzz_test
+ACVP_APP := acvp_app
 INSTPATH ?= /usr/include/intel-ipsec-mb.h
 LIB_DIR ?= ../lib
 
@@ -43,7 +44,12 @@ CFLAGS = -MMD -D_GNU_SOURCE -DNO_COMPAT_IMB_API_053 \
 	-Wformat -Wformat-security \
 	-Wunreachable-code -Wmissing-noreturn -Wsign-compare -Wno-endif-labels \
 	-Wstrict-prototypes -Wmissing-prototypes -Wold-style-definition \
-	-fno-strict-overflow -fno-delete-null-pointer-checks -fwrapv
+	-fno-delete-null-pointer-checks -fwrapv
+
+# -fno-strict-overflow is not supported by clang
+ifneq ($(CC),clang)
+CFLAGS += -fno-strict-overflow
+endif
 
 # if "-z ibt" is supported then assume "-z shstk, -z cet-report=error" are also supported
 # "-fcf-protection" needs to be checked separately
@@ -99,6 +105,13 @@ CFLAGS += -O2
 endif
 endif
 
+ACVP_LOC ?= /usr/local/acvp
+ACVP_HDR ?= $(ACVP_LOC)/include
+ACVP_LIB ?= $(ACVP_LOC)/lib
+ACVP_CFLAGS = -I$(ACVP_HDR) $(CFLAGS)
+ACVP_LDFLAGS = -L$(ACVP_LIB) $(LDFLAGS)
+ACVP_LDLIBS = -lacvp $(LDLIBS)
+
 # ipsec_MB_testapp modules
 SOURCES := main.c gcm_test.c ctr_test.c customop_test.c des_test.c ccm_test.c \
 	cmac_test.c utils.c hmac_sha1_test.c hmac_sha256_sha512_test.c \
@@ -120,6 +133,9 @@ XVALID_OBJECTS := $(XVALID_SOURCES:%.c=%.o) $(XVALID_ASM:%.asm=%.o)
 # fuzz modules
 FUZZ_SOURCES := job_api_fuzz_test.c
 
+# acvp_app modules
+ACVP_SOURCES := acvp_app_main.c utils.c
+
 # list of present dependency files
 DEP_FILES = $(wildcard ./*.d)
 
@@ -136,7 +152,7 @@ ifeq ($(CC_HAS_CET),1)
 endif
 
 # targets come here
-all: $(TEST_APP) $(XVALID_APP) $(FUZZ_APP)
+all: $(TEST_APP) $(XVALID_APP) $(FUZZ_APP) $(ACVP_APP)
 
 $(TEST_APP): $(OBJECTS)
 	$(CC) $(LDFLAGS) $^ $(LDLIBS) -o $@
@@ -144,17 +160,24 @@ $(TEST_APP): $(OBJECTS)
 $(XVALID_APP): $(XVALID_OBJECTS)
 	$(CC) $(LDFLAGS) $^ $(LDLIBS) -o $@
 
+$(ACVP_APP): $(ACVP_SOURCES)
+ifneq ("$(wildcard $(ACVP_HDR))","")
+	$(CC) $(ACVP_CFLAGS) $(ACVP_LDFLAGS) $^ $(ACVP_LDLIBS) -o $@
+else
+	@echo "No libacvp header found at $(ACVP_HDR), $(ACVP_APP) is not built"
+endif
+
 $(FUZZ_APP): $(FUZZ_SOURCES)
 ifneq (, $(shell which clang))
 	clang $(FUZZ_CFLAGS) $(FUZZ_SOURCES) $(LDLIBS) -o $@
 else
-	echo "Clang is not installed. $(FUZZ_APP) is not built"
+	@echo "Clang is not installed. $(FUZZ_APP) is not built"
 endif
 
 
 .PHONY: clean
 clean:
-	-rm -f $(OBJECTS) $(TEST_APP) $(DEP_FILES) $(XVALID_OBJECTS) $(XVALID_APP) $(ASM_OBJECTS) $(FUZZ_APP)
+	-rm -f $(OBJECTS) $(TEST_APP) $(DEP_FILES) $(XVALID_OBJECTS) $(XVALID_APP) $(ASM_OBJECTS) $(FUZZ_APP) $(ACVP_APP)
 
 # style check section
 CHECKPATCH?=checkpatch.pl

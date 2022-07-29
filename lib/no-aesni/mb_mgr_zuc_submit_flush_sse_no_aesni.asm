@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2020-2021, Intel Corporation
+;; Copyright (c) 2020-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -38,4 +38,4 @@
 %define ZUC128_INIT_4 asm_ZucInitialization_4_sse_no_aesni
 %define ZUC256_INIT_4 asm_Zuc256Initialization_4_sse_no_aesni
 %define ZUC_CIPHER_4      asm_ZucCipher_4_sse_no_aesni
-%include "sse/mb_mgr_zuc_submit_flush_sse.asm"
+%include "sse_t1/mb_mgr_zuc_submit_flush_sse.asm"

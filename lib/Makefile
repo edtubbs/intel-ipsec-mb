@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2012-2021, Intel Corporation
+# Copyright (c) 2012-2022, Intel Corporation
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
@@ -90,13 +90,18 @@ CC_HAS_CET = $(and $(shell $(CC) --target-help 2> /dev/null | grep -m1 -e "-z ib
 	$(shell $(CC) --help=common 2> /dev/null | grep -m1 -e "-fcf-protection" | wc -l))
 CET_LDFLAGS=-r -z ibt -z shstk
 endif
-CFLAGS := -DNO_COMPAT_IMB_API_053 $(EXTRA_CFLAGS) $(INCLUDES) \
+CFLAGS := -fPIC -DNO_COMPAT_IMB_API_053 $(EXTRA_CFLAGS) $(INCLUDES) \
 	-W -Wall -Wextra -Wmissing-declarations -Wpointer-arith \
 	-Wcast-qual -Wundef -Wwrite-strings  \
 	-Wformat -Wformat-security \
 	-Wunreachable-code -Wmissing-noreturn -Wsign-compare -Wno-endif-labels \
 	-Wstrict-prototypes -Wmissing-prototypes -Wold-style-definition \
-	-fno-strict-overflow -fno-delete-null-pointer-checks -fwrapv
+	-fno-delete-null-pointer-checks -fwrapv
+
+# -fno-strict-overflow is not supported by clang
+ifneq ($(CC),clang)
+CFLAGS += -fno-strict-overflow
+endif
 
 ifeq ($(MINGW),0)
 CFLAGS += -DLINUX
@@ -133,6 +138,12 @@ LDFLAGS += -s
 endif
 endif
 
+ifeq ($(SAFE_OPTIONS), n)
+SAFE_DATA = n
+SAFE_PARAM = n
+SAFE_LOOKUP = n
+endif
+
 ifneq ($(SAFE_DATA),n)
 CFLAGS += -DSAFE_DATA
 NASM_FLAGS += -DSAFE_DATA
@@ -149,6 +160,12 @@ ifneq ($(SAFE_LOOKUP),n)
 CFLAGS += -DSAFE_LOOKUP
 NASM_FLAGS += -DSAFE_LOOKUP
 YASM_FLAGS += -DSAFE_LOOKUP
+endif
+
+ifeq ($(AESNI_EMU),y)
+CFLAGS += -DAESNI_EMU
+NASM_FLAGS += -DAESNI_EMU
+YASM_FLAGS += -DAESNI_EMU
 endif
 
 # prevent SIMD optimizations for non-aesni modules
@@ -193,7 +210,6 @@ endif
 
 # so or static build
 ifeq ($(SHARED),y)
-CFLAGS += -fPIC
 ifneq ($(MINGW),0)
 LIBNAME = $(LIB).dll
 else
@@ -205,7 +221,6 @@ ifeq ($(CC_HAS_CET),1)
 LDFLAGS += -fcf-protection=full -Wl,-z,ibt -Wl,-z,shstk -Wl,-z,cet-report=error
 endif
 else
-CFLAGS += -fPIE
 LIBNAME = $(LIB).a
 LIBPERM = 0644
 LDFLAGS += -g
@@ -224,6 +239,8 @@ SAFE_DATA_MSG2="Stack and registers containing sensitive information, \
 SAFE_LOOKUP_MSG1="SAFE_LOOKUP option not set."
 SAFE_LOOKUP_MSG2="Lookups which depend on sensitive information \
 		are not guaranteed to be done in constant time."
+SAFE_OPTIONS_MSG1="SAFE_OPTIONS not specified."
+SAFE_OPTIONS_MSG2="All safe options enabled by default."
 
 #
 # List of C modules (any origin)
@@ -233,35 +250,46 @@ c_lib_objs := \
 	mb_mgr_avx2.o \
 	mb_mgr_avx512.o \
 	mb_mgr_sse.o \
-	mb_mgr_sse_no_aesni.o \
 	alloc.o \
 	aes_xcbc_expand_key.o \
 	md5_one_block.o \
 	sha_sse.o \
+	sha_mb_sse.o \
+	sha_ni_mb_sse.o \
 	sha_avx.o \
+	sha_mb_avx.o \
+	sha_mb_avx2.o \
+	sha_mb_avx512.o \
 	des_key.o \
 	des_basic.o \
 	version.o \
 	cpu_feature.o \
-	aesni_emu.o \
 	kasumi_avx.o \
 	kasumi_iv.o \
 	kasumi_sse.o \
 	zuc_top_sse.o \
-	zuc_top_sse_no_aesni.o \
 	zuc_top_avx.o \
 	zuc_top_avx2.o \
 	zuc_top_avx512.o \
 	zuc_iv.o \
 	snow3g_sse.o \
-	snow3g_sse_no_aesni.o \
 	snow3g_avx.o \
 	snow3g_avx2.o \
 	snow3g_avx512.o \
 	snow3g_tables.o \
 	snow3g_iv.o \
 	mb_mgr_auto.o \
-	error.o
+	error.o \
+	ooo_mgr_reset.o
+
+ifeq ($(AESNI_EMU), y)
+c_lib_objs := $(c_lib_objs) \
+	mb_mgr_sse_no_aesni.o \
+	aesni_emu.o \
+	zuc_top_sse_no_aesni.o \
+	snow3g_sse_no_aesni.o
+endif
+
 #
 # List of ASM modules (root directory/common)
 #
@@ -321,8 +349,6 @@ asm_noaesni_lib_objs := \
 	crc16_x25_sse_no_aesni.o \
 	aes128_cbcs_1_9_enc_x4_sse_no_aesni.o \
 	aes128_cbcs_1_9_dec_by4_sse_no_aesni.o \
-	mb_mgr_aes128_cbcs_1_9_submit_sse.o \
-	mb_mgr_aes128_cbcs_1_9_flush_sse.o \
 	mb_mgr_aes128_cbcs_1_9_submit_sse_no_aesni.o \
 	mb_mgr_aes128_cbcs_1_9_flush_sse_no_aesni.o \
 	crc32_refl_by8_sse_no_aesni.o \
@@ -358,6 +384,9 @@ asm_sse_lib_objs := \
 	aes128_ecb_by4_sse.o \
 	aes192_ecb_by4_sse.o \
 	aes256_ecb_by4_sse.o \
+	aes128_ecb_by8_sse.o \
+	aes192_ecb_by8_sse.o \
+	aes256_ecb_by8_sse.o \
 	aes128_cntr_ccm_by8_sse.o \
 	aes256_cntr_ccm_by8_sse.o \
 	aes_cfb_sse.o \
@@ -376,9 +405,10 @@ asm_sse_lib_objs := \
 	sha512_x2_sse.o \
 	sha256_mult_sse.o \
 	sha1_ni_x2_sse.o \
+	sha1_ni_x1_sse.o \
 	sha256_ni_x2_sse.o \
 	zuc_x4_sse.o \
-	zuc_gfni_sse.o \
+	zuc_x4_gfni_sse.o \
 	mb_mgr_aes128_cbc_enc_flush_x4_sse.o \
 	mb_mgr_aes128_cbc_enc_submit_x4_sse.o \
 	mb_mgr_aes192_cbc_enc_flush_x4_sse.o \
@@ -391,6 +421,8 @@ asm_sse_lib_objs := \
 	mb_mgr_aes192_cbc_enc_submit_x8_sse.o \
 	mb_mgr_aes256_cbc_enc_flush_x8_sse.o \
 	mb_mgr_aes256_cbc_enc_submit_x8_sse.o \
+	mb_mgr_aes128_cbcs_1_9_submit_sse.o \
+	mb_mgr_aes128_cbcs_1_9_flush_sse.o \
 	mb_mgr_aes128_cmac_submit_flush_x4_sse.o \
 	mb_mgr_aes256_cmac_submit_flush_x4_sse.o \
 	mb_mgr_aes128_cmac_submit_flush_x8_sse.o \
@@ -421,6 +453,8 @@ asm_sse_lib_objs := \
 	mb_mgr_hmac_sha256_submit_ni_sse.o \
 	mb_mgr_zuc_submit_flush_sse.o \
 	mb_mgr_zuc_submit_flush_gfni_sse.o \
+	mb_mgr_snow3g_uea2_submit_flush_x4_sse.o \
+	mb_mgr_snow3g_uia2_submit_flush_x4_sse.o \
 	ethernet_fcs_sse.o \
 	crc16_x25_sse.o \
 	crc32_sctp_sse.o \
@@ -433,7 +467,7 @@ asm_sse_lib_objs := \
 	crc32_iuup_sse.o \
 	crc32_wimax_sse.o \
 	chacha20_sse.o \
-        memcpy_sse.o \
+	memcpy_sse.o \
 	snow_v_sse.o \
 	snow3g_uia2_by4_sse.o
 
@@ -453,9 +487,9 @@ asm_avx_lib_objs := \
 	aes256_cntr_by8_avx.o \
 	aes128_cntr_ccm_by8_avx.o \
 	aes256_cntr_ccm_by8_avx.o \
-	aes128_ecb_by4_avx.o \
-	aes192_ecb_by4_avx.o \
-	aes256_ecb_by4_avx.o \
+	aes128_ecb_by8_avx.o \
+	aes192_ecb_by8_avx.o \
+	aes256_ecb_by8_avx.o \
 	aes_cfb_avx.o \
 	aes128_cbc_mac_x8_avx.o \
 	aes256_cbc_mac_x8_avx.o \
@@ -522,6 +556,9 @@ asm_avx2_lib_objs := \
 	sha256_oct_avx2.o \
 	sha512_x4_avx2.o \
 	zuc_x8_avx2.o \
+	aes128_ecb_vaes_avx2.o \
+	aes192_ecb_vaes_avx2.o \
+	aes256_ecb_vaes_avx2.o \
 	mb_mgr_hmac_md5_flush_avx2.o \
 	mb_mgr_hmac_md5_submit_avx2.o \
 	mb_mgr_hmac_sha1_flush_avx2.o \
@@ -545,6 +582,7 @@ asm_avx512_lib_objs := \
 	sha256_x16_avx512.o \
 	sha512_x8_avx512.o \
 	des_x16_avx512.o \
+	aes_ecb_vaes_avx512.o \
 	aes_cntr_api_by16_vaes_avx512.o \
 	aes_cntr_bit_api_by16_vaes_avx512.o \
 	aes_cntr_ccm_api_by16_vaes_avx512.o \
@@ -634,11 +672,14 @@ asm_avx512_gcm_objs := \
 # build object files lists
 #
 asm_obj_files := $(asm_generic_lib_objs) \
-	$(asm_noaesni_lib_objs) $(asm_noaesni_gcm_objs) \
 	$(asm_sse_lib_objs) $(asm_sse_gcm_objs) \
 	$(asm_avx_lib_objs) $(asm_avx_gcm_objs) \
 	$(asm_avx2_lib_objs) $(asm_avx2_gcm_objs) \
 	$(asm_avx512_lib_objs) $(asm_avx512_gcm_objs)
+
+ifeq ($(AESNI_EMU), y)
+asm_obj_files := $(asm_obj_files) $(asm_noaesni_lib_objs) $(asm_noaesni_gcm_objs)
+endif
 c_obj_files := $(c_lib_objs) $(c_gcm_objs)
 
 #
@@ -665,17 +706,24 @@ dep_target_files := $(dep_files:%=$(OBJ_DIR)/%)
 
 all: $(LIB_DIR)/$(LIBNAME)
 
-$(LIB_DIR)/$(LIBNAME): $(target_obj_files)
+$(LIB)_lnk.def: $(LIB).def
+ifneq ($(AESNI_EMU), y)
+	grep -v _no_aesni $(LIB).def > $(LIB)_lnk.def
+else
+	cp -f $(LIB).def $(LIB)_lnk.def
+endif
+
+$(LIB_DIR)/$(LIBNAME): $(target_obj_files) $(LIB)_lnk.def
 ifeq ($(SHARED),y)
 ifneq ($(MINGW),0)
-	$(CC) -shared $(LDFLAGS) -o $(LIBNAME) $^ $(LIB).def
+	$(CC) -shared $(LDFLAGS) -o $(LIBNAME) $^
 else
-	$(CC) -shared $(LDFLAGS) -Wl,-soname,$(LIB).so.$(SO_VERSION) -o $@ $^ -lc
+	$(CC) -shared $(LDFLAGS) -Wl,-soname,$(LIB).so.$(SO_VERSION) -o $@ $(target_obj_files) -lc
 	ln -f -s $(LIBNAME) $(LIB_DIR)/$(LIB).so.$(SO_VERSION)
 	ln -f -s $(LIB).so.$(SO_VERSION) $(LIB_DIR)/$(LIB).so
 endif
 else
-	$(AR) -qcs $@ $^
+	$(AR) -qcs $@ $(target_obj_files)
 endif
 ifeq ($(SAFE_PARAM), n)
 	@echo "NOTE:" $(SAFE_PARAM_MSG1) $(SAFE_PARAM_MSG2)
@@ -685,6 +733,9 @@ ifeq ($(SAFE_DATA), n)
 endif
 ifeq ($(SAFE_LOOKUP), n)
 	@echo "NOTE:" $(SAFE_LOOKUP_MSG1) $(SAFE_LOOKUP_MSG2)
+endif
+ifneq ($(SAFE_OPTIONS), n)
+	@echo "NOTE:" $(SAFE_OPTIONS_MSG1) $(SAFE_OPTIONS_MSG2)
 endif
 
 .PHONY: install
@@ -746,10 +797,38 @@ ifeq ($(CC_HAS_CET),1)
 	mv $@.tmp $@
 endif
 
-$(OBJ_DIR)/%.o:sse/%.c
+$(OBJ_DIR)/%.o:sse_t1/%.c
 	$(CC) -MMD $(OPT_SSE) -c $(CFLAGS) $< -o $@
 
-$(OBJ_DIR)/%.o:sse/%.asm
+$(OBJ_DIR)/%.o:sse_t1/%.asm
+ifeq ($(USE_YASM),y)
+	$(YASM) $(YASM_FLAGS) $< -o $@
+else
+	$(NASM) -MD $(@:.o=.d) -MT $@ -o $@ $(NASM_FLAGS) $<
+endif
+ifeq ($(CC_HAS_CET),1)
+	$(LD) $(CET_LDFLAGS) -o $@.tmp $@
+	mv $@.tmp $@
+endif
+
+$(OBJ_DIR)/%.o:sse_t2/%.c
+	$(CC) -MMD $(OPT_SSE) -c $(CFLAGS) $< -o $@
+
+$(OBJ_DIR)/%.o:sse_t2/%.asm
+ifeq ($(USE_YASM),y)
+	$(YASM) $(YASM_FLAGS) $< -o $@
+else
+	$(NASM) -MD $(@:.o=.d) -MT $@ -o $@ $(NASM_FLAGS) $<
+endif
+ifeq ($(CC_HAS_CET),1)
+	$(LD) $(CET_LDFLAGS) -o $@.tmp $@
+	mv $@.tmp $@
+endif
+
+$(OBJ_DIR)/%.o:sse_t3/%.c
+	$(CC) -MMD $(OPT_SSE) -c $(CFLAGS) $< -o $@
+
+$(OBJ_DIR)/%.o:sse_t3/%.asm
 ifeq ($(USE_YASM),y)
 	$(YASM) $(YASM_FLAGS) $< -o $@
 else
@@ -774,10 +853,10 @@ ifeq ($(CC_HAS_CET),1)
 	mv $@.tmp $@
 endif
 
-$(OBJ_DIR)/%.o:avx2/%.c
+$(OBJ_DIR)/%.o:avx2_t1/%.c
 	$(CC) -MMD $(OPT_AVX2) -c $(CFLAGS) $< -o $@
 
-$(OBJ_DIR)/%.o:avx2/%.asm
+$(OBJ_DIR)/%.o:avx2_t1/%.asm
 ifeq ($(USE_YASM),y)
 	$(YASM) $(YASM_FLAGS) $< -o $@
 else
@@ -788,10 +867,38 @@ ifeq ($(CC_HAS_CET),1)
 	mv $@.tmp $@
 endif
 
-$(OBJ_DIR)/%.o:avx512/%.c
+$(OBJ_DIR)/%.o:avx2_t2/%.c
+	$(CC) -MMD $(OPT_AVX2) -c $(CFLAGS) $< -o $@
+
+$(OBJ_DIR)/%.o:avx2_t2/%.asm
+ifeq ($(USE_YASM),y)
+	$(YASM) $(YASM_FLAGS) $< -o $@
+else
+	$(NASM) -MD $(@:.o=.d) -MT $@ -o $@ $(NASM_FLAGS) $<
+endif
+ifeq ($(CC_HAS_CET),1)
+	$(LD) $(CET_LDFLAGS) -o $@.tmp $@
+	mv $@.tmp $@
+endif
+
+$(OBJ_DIR)/%.o:avx512_t1/%.c
 	$(CC) -MMD $(OPT_AVX512) -c $(CFLAGS) $< -o $@
 
-$(OBJ_DIR)/%.o:avx512/%.asm
+$(OBJ_DIR)/%.o:avx512_t1/%.asm
+ifeq ($(USE_YASM),y)
+	$(YASM) $(YASM_FLAGS) $< -o $@
+else
+	$(NASM) -MD $(@:.o=.d) -MT $@ -o $@ $(NASM_FLAGS) $<
+endif
+ifeq ($(CC_HAS_CET),1)
+	$(LD) $(CET_LDFLAGS) -o $@.tmp $@
+	mv $@.tmp $@
+endif
+
+$(OBJ_DIR)/%.o:avx512_t2/%.c
+	$(CC) -MMD $(OPT_AVX512) -c $(CFLAGS) $< -o $@
+
+$(OBJ_DIR)/%.o:avx512_t2/%.asm
 ifeq ($(USE_YASM),y)
 	$(YASM) $(YASM_FLAGS) $< -o $@
 else
@@ -832,6 +939,7 @@ TAGS:
 clean:
 	rm -Rf $(target_obj_files)
 	rm -Rf $(dep_target_files)
+	rm -f $(LIB_DIR)/$(LIB)_lnk.def
 	rm -f $(LIB_DIR)/$(LIB).a $(LIB_DIR)/$(LIB).so* $(LIB_DIR)/$(LIB).dll
 
 .PHONY: doxy
@@ -849,6 +957,8 @@ help:
 	@echo "		- this option will modify the optimization level when DEBUG is used"
 	@echo "DEBUG=y   - this option will produce library fit for debugging"
 	@echo "SHARED=n  - this option will produce static library"
+	@echo "AESNI_EMU=y - AESNI emulation support enabled"
+	@echo "AESNI_EMU=n - AESNI emulation support disabled (default)"
 	@echo "OBJ_DIR=obj (default)"
 	@echo "          - this option can be used to change build directory"
 	@echo "LIB_DIR=. (default)"
@@ -867,6 +977,8 @@ help:
 	@echo "          - Lookups depending on sensitive data might not be constant time"
 	@echo "SAFE_LOOKUP=y (default)"
 	@echo "          - Lookups depending on sensitive data are constant time"
+	@echo "SAFE_OPTIONS=n"
+	@echo "          - Disable all safe options (enabled by default)"
 
 
 CHECKPATCH ?= checkpatch.pl

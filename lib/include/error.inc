@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2021, Intel Corporation
+;; Copyright (c) 2021-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -27,6 +27,8 @@
 
 %ifndef ERROR_ASM_INCLUDED
 %define ERROR_ASM_INCLUDED
+
+%include "include/reg_sizes.asm"
 
 extern imb_errno
 extern imb_errno_types
@@ -81,7 +83,17 @@ SET_ERRNO_TYPES \
     IMB_ERR_AAD_LEN,            \
     IMB_ERR_SRC_OFFSET,         \
     IMB_ERR_NULL_AUTH_KEY,      \
-    IMB_ERR_NULL_CTX
+    IMB_ERR_NULL_CTX,           \
+    IMB_ERR_NO_AESNI_EMU,       \
+    IMB_ERR_JOB_NULL_HMAC_OPAD, \
+    IMB_ERR_JOB_NULL_HMAC_IPAD, \
+    IMB_ERR_JOB_NULL_XCBC_K1_EXP,       \
+    IMB_ERR_JOB_NULL_XCBC_K2,   \
+    IMB_ERR_JOB_NULL_XCBC_K3,   \
+    IMB_ERR_JOB_CIPH_DIR,       \
+    IMB_ERR_JOB_NULL_GHASH_INIT_TAG, \
+    IMB_ERR_MISSING_CPUFLAGS_INIT_MGR, \
+    IMB_ERR_NULL_JOB
 
 ;; Reset global imb_errno to 0
 %macro IMB_ERR_CHECK_RESET 0

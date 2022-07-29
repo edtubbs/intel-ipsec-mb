@@ -1,5 +1,5 @@
 /*******************************************************************************
-  Copyright (c) 2018-2021, Intel Corporation
+  Copyright (c) 2018-2022, Intel Corporation
 
   Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions are met:
@@ -84,6 +84,11 @@ const struct {
 	OOO_INFO(aes256_cmac_ooo, MB_MGR_CMAC_OOO),
         OOO_INFO(snow3g_uea2_ooo, MB_MGR_SNOW3G_OOO),
         OOO_INFO(snow3g_uia2_ooo, MB_MGR_SNOW3G_OOO),
+        OOO_INFO(sha_1_ooo, MB_MGR_SHA_1_OOO),
+        OOO_INFO(sha_224_ooo, MB_MGR_SHA_256_OOO),
+        OOO_INFO(sha_256_ooo, MB_MGR_SHA_256_OOO),
+        OOO_INFO(sha_384_ooo, MB_MGR_SHA_512_OOO),
+        OOO_INFO(sha_512_ooo, MB_MGR_SHA_512_OOO)
 };
 
 /**
@@ -175,10 +180,17 @@ IMB_MGR *imb_set_pointers_mb_mgr(void *mem_ptr, const uint64_t flags,
 
         IMB_MGR *ptr = (IMB_MGR *) mem_ptr;
         uint8_t *ptr8 = (uint8_t *) ptr;
-        uint8_t *free_mem = &ptr8[ALIGN(sizeof(IMB_MGR), ALIGNMENT)];
+        uint8_t *free_ptr = &ptr8[ALIGN(sizeof(IMB_MGR), ALIGNMENT)];
         const size_t mem_size = imb_get_mb_mgr_size();
         unsigned i;
 
+        /* Check if AESNI_EMU flag is set, needed to support AESNI emulation */
+#ifndef AESNI_EMU
+        if (flags & IMB_FLAG_AESNI_OFF) {
+                imb_set_errno(ptr, IMB_ERR_NO_AESNI_EMU);
+                return NULL;
+        }
+#endif
         if (reset_mgr) {
                 /* Zero out MB_MGR memory */
                 memset(mem_ptr, 0, mem_size);
@@ -188,8 +200,14 @@ IMB_MGR *imb_set_pointers_mb_mgr(void *mem_ptr, const uint64_t flags,
                 /* Reset function pointers from previously used architecture */
                 switch (used_arch) {
                 case IMB_ARCH_NOAESNI:
+#ifdef AESNI_EMU
                         init_mb_mgr_sse_no_aesni_internal(ptr, 0);
                         break;
+#else
+                        /* Return NULL if AESNI_EMU is not enabled */
+                        imb_set_errno(ptr, IMB_ERR_NO_AESNI_EMU);
+                        return NULL;
+#endif
                 case IMB_ARCH_SSE:
                         init_mb_mgr_sse_internal(ptr, 0);
                         break;
@@ -213,9 +231,9 @@ IMB_MGR *imb_set_pointers_mb_mgr(void *mem_ptr, const uint64_t flags,
 
         /* Set OOO pointers */
         for (i = 0; i < IMB_DIM(ooo_mgr_table); i++) {
-                set_ooo_ptr(ptr, ooo_mgr_table[i].ooo_ptr_offset, free_mem);
-                free_mem = &free_mem[ooo_mgr_table[i].ooo_aligned_size];
-                IMB_ASSERT((uintptr_t)(free_mem - ptr8) <= mem_size);
+                set_ooo_ptr(ptr, ooo_mgr_table[i].ooo_ptr_offset, free_ptr);
+                free_ptr = &free_ptr[ooo_mgr_table[i].ooo_aligned_size];
+                IMB_ASSERT((uintptr_t)(free_ptr - ptr8) <= mem_size);
         }
         set_ooo_mgr_road_block(ptr);
 
@@ -267,6 +285,13 @@ IMB_MGR *alloc_mb_mgr(uint64_t flags)
 {
         IMB_MGR *ptr = NULL;
 
+        /* Check if AESNI_EMU flag is set, needed to support AESNI emulation */
+#ifndef AESNI_EMU
+        if (flags & IMB_FLAG_AESNI_OFF) {
+                imb_set_errno(ptr, IMB_ERR_NO_AESNI_EMU);
+                return NULL;
+        }
+#endif
         ptr = alloc_aligned_mem(imb_get_mb_mgr_size());
         IMB_ASSERT(ptr != NULL);
         if (ptr != NULL) {

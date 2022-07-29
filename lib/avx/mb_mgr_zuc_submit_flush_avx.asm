@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2019-2021, Intel Corporation
+;; Copyright (c) 2019-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -31,6 +31,7 @@
 %include "include/cet.inc"
 %include "include/reg_sizes.asm"
 %include "include/const.inc"
+%include "include/clear_regs.asm"
 
 %define SUBMIT_JOB_ZUC128_EEA3 submit_job_zuc_eea3_avx
 %define FLUSH_JOB_ZUC128_EEA3 flush_job_zuc_eea3_avx
@@ -104,13 +105,15 @@ extern asm_ZucCipher_4_avx
 %define arg4    rcx
 %define arg5    r8
 %define arg6    r9
+%define arg7    qword [rsp]
 %else
 %define arg1    rcx
 %define arg2    rdx
 %define arg3    r8
 %define arg4    r9
-%define arg5    [rsp + 32]
-%define arg6    [rsp + 40]
+%define arg5    qword [rsp + 32]
+%define arg6    qword [rsp + 40]
+%define arg7    qword [rsp + 48]
 %endif
 
 %define state   arg1
@@ -255,12 +258,14 @@ mksection .text
         ; Read and write next byte
         mov     al, [tmp + 16]
         mov     [state + _zuc_args_IV + lane + 16], al
-        ; Read next 6 bytes and write as 8 bytes
-        movzx   DWORD(tmp2), word [tmp + 17]
-        mov     DWORD(tmp3), [tmp + 19]
-        shl     tmp2, 32
-        or      tmp2, tmp3
+        ; Read last 8 bytes and keep only the last 6 bytes
+        mov     tmp2, [tmp + 15]
+        mov     tmp3, 0x0000ffffffffffff
+        bswap   tmp2
+        and     tmp2, tmp3 ; last 6 bytes of IV
+        ; Expand 6 bytes to 8 bytes and write out
         EXPAND_FROM_6_TO_8_BYTES tmp2, tmp, tmp3
+        bswap   tmp2
         mov     [state + _zuc_args_IV + lane + 17], tmp2
 
         jmp     %%_iv_read
@@ -323,29 +328,20 @@ mksection .text
 %assign I (I + 1)
 %endrep
 
-        ;; If Windows, reserve memory in stack for parameter transferring
-%ifndef LINUX
-        ;; 24 bytes for 3 parameters
-        sub     rsp, 24
-%endif
+        RESERVE_STACK_SPACE 5
+
         lea     arg1, [r12 + _zuc_args_keys]
         lea     arg2, [r12 + _zuc_args_IV]
         lea     arg3, [r12 + _zuc_state]
-%if %%KEY_SIZE == 256
-        ;; Setting "tag size" to 2 in case of ciphering
-        ;; (dummy size, just for constant selecion at Initialization)
-        mov     arg4, 2
-%endif
 
 %if %%KEY_SIZE == 128
         call    asm_ZucInitialization_4_avx
 %else
+        mov     arg5, 0 ; Tag size = 0, arg4 not used
         call    asm_Zuc256Initialization_4_avx
 %endif
 
-%ifndef LINUX
-        add     rsp, 24
-%endif
+        RESTORE_STACK_SPACE 5
 
         cmp     byte [r12 + _zuc_init_not_done], 0x0f ; Init done for all lanes
         je      %%skip_submit_restoring_state
@@ -385,11 +381,8 @@ mksection .text
 %endif
         mov     byte [r12 + _zuc_init_not_done], 0 ; Init done for all lanes
 
-        ;; If Windows, reserve memory in stack for parameter transferring
-%ifndef LINUX
-        ;; 40 bytes for 5 parameters
-        sub     rsp, 40
-%endif
+        RESERVE_STACK_SPACE 5
+
         lea     arg1, [r12 + _zuc_state]
         lea     arg2, [r12 + _zuc_args_in]
         lea     arg3, [r12 + _zuc_args_out]
@@ -398,9 +391,7 @@ mksection .text
 
         call    asm_ZucCipher_4_avx
 
-%ifndef LINUX
-        add     rsp, 40
-%endif
+        RESTORE_STACK_SPACE 5
 
         mov     state, [rsp + _gpr_save + 8*8]
         mov     job,   [rsp + _gpr_save + 8*9]
@@ -423,7 +414,9 @@ mksection .text
 %endif
 
 %%return_submit_eea3:
-
+%ifdef SAFE_DATA
+        clear_all_xmms_avx_asm
+%endif
         mov     rbx, [rsp + _gpr_save + 8*0]
         mov     rbp, [rsp + _gpr_save + 8*1]
         mov     r12, [rsp + _gpr_save + 8*2]
@@ -537,29 +530,21 @@ APPEND(%%skip_eea3_,I):
 %assign I (I + 1)
 %endrep
 
-        ;; If Windows, reserve memory in stack for parameter transferring
-%ifndef LINUX
-        ;; 24 bytes for 3 parameters
-        sub     rsp, 24
-%endif
+        RESERVE_STACK_SPACE 5
+
         lea     arg1, [r12 + _zuc_args_keys]
         lea     arg2, [r12 + _zuc_args_IV]
         lea     arg3, [r12 + _zuc_state]
-%if %%KEY_SIZE == 256
-        ;; Setting "tag size" to 2 in case of ciphering
-        ;; (dummy size, just for constant selecion at Initialization)
-        mov     arg4, 2
-%endif
 
 %if %%KEY_SIZE == 128
         call    asm_ZucInitialization_4_avx
 %else
+        mov     arg5, 0 ; Tag size = 0, arg4 not used
         call    asm_Zuc256Initialization_4_avx
 %endif
 
-%ifndef LINUX
-        add     rsp, 24
-%endif
+        RESTORE_STACK_SPACE 5
+
         cmp     word [r12 + _zuc_init_not_done], 0x0f ; Init done for all lanes
         je      %%skip_flush_restoring_state
 
@@ -617,11 +602,8 @@ APPEND3(%%skip_eea3_copy_,I,J):
         vmovdqa [r12 + _zuc_state + 16*I], xmm1 ; Save new state
 %assign I (I+1)
 %endrep
-        ;; If Windows, reserve memory in stack for parameter transferring
-%ifndef LINUX
-        ;; 40 bytes for 5 parameters
-        sub     rsp, 40
-%endif
+        RESERVE_STACK_SPACE 5
+
         lea     arg1, [r12 + _zuc_state]
         lea     arg2, [r12 + _zuc_args_in]
         lea     arg3, [r12 + _zuc_args_out]
@@ -630,9 +612,8 @@ APPEND3(%%skip_eea3_copy_,I,J):
 
         call    asm_ZucCipher_4_avx
 
-%ifndef LINUX
-        add     rsp, 40
-%endif
+        RESTORE_STACK_SPACE 5
+
         mov     state, [rsp + _gpr_save + 8*8]
 
         ; Clear ZUC state of the lane that is returned and NULL lanes
@@ -665,7 +646,9 @@ APPEND3(%%skip_eea3_copy_,I,J):
         SHIFT_GP        1, idx, tmp3, tmp4, left
         or      [state + _zuc_unused_lane_bitmask], BYTE(tmp3)
 %%return_flush_eea3:
-
+%ifdef SAFE_DATA
+        clear_all_xmms_avx_asm
+%endif
         mov     rbx, [rsp + _gpr_save + 8*0]
         mov     rbp, [rsp + _gpr_save + 8*1]
         mov     r12, [rsp + _gpr_save + 8*2]
@@ -711,8 +694,9 @@ MKGLOBAL(FLUSH_JOB_ZUC256_EEA3,function,internal)
 FLUSH_JOB_ZUC256_EEA3:
         FLUSH_JOB_ZUC_EEA3 256
 
-%macro SUBMIT_JOB_ZUC_EIA3 1
+%macro SUBMIT_JOB_ZUC_EIA3 2
 %define %%KEY_SIZE      %1 ; [constant] Key size (128 or 256)
+%define %%TAG_SIZE      %2 ; [constant] Tag size (4, 8 or 16)
 
 ; idx needs to be in rbp
 %define len              rbp
@@ -765,12 +749,14 @@ FLUSH_JOB_ZUC256_EEA3:
         ; Read and write next byte
         mov     al, [tmp + 16]
         mov     [state + _zuc_args_IV + lane + 16], al
-        ; Read next 6 bytes and write as 8 bytes
-        movzx   DWORD(tmp2), word [tmp + 17]
-        mov     DWORD(tmp3), [tmp + 19]
-        shl     tmp2, 32
-        or      tmp2, tmp3
+        ; Read last 8 bytes and keep only the last 6 bytes
+        mov     tmp2, [tmp + 15]
+        mov     tmp3, 0x0000ffffffffffff
+        bswap   tmp2
+        and     tmp2, tmp3 ; last 6 bytes of IV
+        ; Expand 6 bytes to 8 bytes and write out
         EXPAND_FROM_6_TO_8_BYTES tmp2, tmp, tmp3
+        bswap   tmp2
         mov     [state + _zuc_args_IV + lane + 17], tmp2
 
         jmp     %%_iv_read
@@ -817,11 +803,12 @@ FLUSH_JOB_ZUC256_EEA3:
         ; to pass parameter to next function
         mov     r11, state
 
-        ;; If Windows, reserve memory in stack for parameter transferring
-%ifndef LINUX
-        ;; 48 bytes for 6 parameters (already aligned to 16 bytes)
-        sub     rsp, 48
+%if %%KEY_SIZE == 128
+        RESERVE_STACK_SPACE 6
+%else ; %%KEY_SIZE == 256
+        RESERVE_STACK_SPACE 7
 %endif
+
         lea     arg1, [r11 + _zuc_args_keys]
         lea     arg2, [r11 + _zuc_args_IV]
         lea     arg3, [r11 + _zuc_args_in]
@@ -835,6 +822,9 @@ FLUSH_JOB_ZUC256_EEA3:
         lea     r12, [r11 + _zuc_job_in_lane]
         mov     arg6, r12
 %endif
+%if %%KEY_SIZE == 256
+        mov     arg7, %%TAG_SIZE
+%endif
 
 %if %%KEY_SIZE == 128
         call    zuc_eia3_4_buffer_job_avx
@@ -842,8 +832,10 @@ FLUSH_JOB_ZUC256_EEA3:
         call    zuc256_eia3_4_buffer_job_avx
 %endif
 
-%ifndef LINUX
-        add     rsp, 48
+%if %%KEY_SIZE == 128
+        RESTORE_STACK_SPACE 6
+%else ;; %%KEY_SIZE == 256
+        RESTORE_STACK_SPACE 7
 %endif
         mov     state, [rsp + _gpr_save + 8*8]
         mov     job,   [rsp + _gpr_save + 8*9]
@@ -864,7 +856,9 @@ FLUSH_JOB_ZUC256_EEA3:
         mov     [state + _zuc_unused_lanes], unused_lanes
 
 %%return_submit_eia3:
-
+%ifdef SAFE_DATA
+        clear_all_xmms_avx_asm
+%endif
         mov     rbx, [rsp + _gpr_save + 8*0]
         mov     rbp, [rsp + _gpr_save + 8*1]
         mov     r12, [rsp + _gpr_save + 8*2]
@@ -877,15 +871,18 @@ FLUSH_JOB_ZUC256_EEA3:
 %endif
         mov     rsp, [rsp + _rsp_save]  ; original SP
 
-        ret
+        jmp     %%exit_submit_eia3
 
 %%return_null_submit_eia3:
         xor     job_rax, job_rax
         jmp     %%return_submit_eia3
+
+%%exit_submit_eia3:
 %endmacro
 
-%macro FLUSH_JOB_ZUC_EIA3 1
+%macro FLUSH_JOB_ZUC_EIA3 2
 %define %%KEY_SIZE      %1 ; [constant] Key size (128 or 256)
+%define %%TAG_SIZE      %2 ; [constant] Tag size (4, 8 or 16)
 
 %define unused_lanes     rbx
 %define tmp1             rbx
@@ -971,9 +968,10 @@ APPEND(%%skip_eia3_,I):
         ; to pass parameter to next function
         mov     r11, state
 
-%ifndef LINUX
-        ;; 48 bytes for 6 parameters (already aligned to 16 bytes)
-        sub     rsp, 48
+%if %%KEY_SIZE == 128
+        RESERVE_STACK_SPACE 6
+%else ; %%KEY_SIZE == 256
+        RESERVE_STACK_SPACE 7
 %endif
         lea     arg1, [r11 + _zuc_args_keys]
         lea     arg2, [r11 + _zuc_args_IV]
@@ -988,6 +986,9 @@ APPEND(%%skip_eia3_,I):
         lea     r12, [r11 + _zuc_job_in_lane]
         mov     arg6, r12
 %endif
+%if %%KEY_SIZE == 256
+        mov     arg7, %%TAG_SIZE
+%endif
 
 %if %%KEY_SIZE == 128
         call    zuc_eia3_4_buffer_job_avx
@@ -995,8 +996,10 @@ APPEND(%%skip_eia3_,I):
         call    zuc256_eia3_4_buffer_job_avx
 %endif
 
-%ifndef LINUX
-        add     rsp, 48
+%if %%KEY_SIZE == 128
+        RESTORE_STACK_SPACE 6
+%else ;; %%KEY_SIZE == 256
+        RESTORE_STACK_SPACE 7
 %endif
 
         mov	tmp5, [rsp + _null_len_save]
@@ -1018,7 +1021,9 @@ APPEND(%%skip_eia3_,I):
         mov     [state + _zuc_unused_lanes], unused_lanes
 
 %%return_flush_eia3:
-
+%ifdef SAFE_DATA
+        clear_all_xmms_avx_asm
+%endif
         mov     rbx, [rsp + _gpr_save + 8*0]
         mov     rbp, [rsp + _gpr_save + 8*1]
         mov     r12, [rsp + _gpr_save + 8*2]
@@ -1031,11 +1036,13 @@ APPEND(%%skip_eia3_,I):
 %endif
         mov     rsp, [rsp + _rsp_save]  ; original SP
 
-        ret
+        jmp     %%exit_flush_eia3
 
 %%return_null_flush_eia3:
         xor     job_rax, job_rax
         jmp     %%return_flush_eia3
+
+%%exit_flush_eia3:
 %endmacro
 
 ; JOB* SUBMIT_JOB_ZUC128_EIA3(MB_MGR_ZUC_OOO *state, IMB_JOB *job)
@@ -1043,25 +1050,60 @@ APPEND(%%skip_eia3_,I):
 ; arg 2 : job
 MKGLOBAL(SUBMIT_JOB_ZUC128_EIA3,function,internal)
 SUBMIT_JOB_ZUC128_EIA3:
-        SUBMIT_JOB_ZUC_EIA3 128
+        SUBMIT_JOB_ZUC_EIA3 128, 4
+        ret
 
-; JOB* SUBMIT_JOB_ZUC256_EIA3(MB_MGR_ZUC_OOO *state, IMB_JOB *job)
+; JOB* SUBMIT_JOB_ZUC256_EIA3(MB_MGR_ZUC_OOO *state, IMB_JOB *job,
+;                             const uint64_t tag_sz)
 ; arg 1 : state
 ; arg 2 : job
+; arg 3 : tag size (4, 8 or 16 bytes)
 MKGLOBAL(SUBMIT_JOB_ZUC256_EIA3,function,internal)
 SUBMIT_JOB_ZUC256_EIA3:
-        SUBMIT_JOB_ZUC_EIA3 256
+        cmp     arg3, 8
+        je      submit_tag_8B
+        jb      submit_tag_4B
+
+        ; Fall-through for 16-byte tag
+submit_tag_16B:
+        SUBMIT_JOB_ZUC_EIA3 256, 16
+        ret
+submit_tag_8B:
+        SUBMIT_JOB_ZUC_EIA3 256, 8
+        ret
+submit_tag_4B:
+        SUBMIT_JOB_ZUC_EIA3 256, 4
+        ret
 
 ; JOB* FLUSH_JOB_ZUC128_EIA3(MB_MGR_ZUC_OOO *state)
 ; arg 1 : state
 MKGLOBAL(FLUSH_JOB_ZUC128_EIA3,function,internal)
 FLUSH_JOB_ZUC128_EIA3:
-        FLUSH_JOB_ZUC_EIA3 128
+        FLUSH_JOB_ZUC_EIA3 128, 4
+        ret
 
-; JOB* FLUSH_JOB_ZUC256_EIA3(MB_MGR_ZUC_OOO *state)
+; JOB* FLUSH_JOB_ZUC256_EIA3(MB_MGR_ZUC_OOO *state,
+;                            const uint64_t tag_sz)
 ; arg 1 : state
+; arg 2 : tag size (4, 8 or 16 bytes)
 MKGLOBAL(FLUSH_JOB_ZUC256_EIA3,function,internal)
 FLUSH_JOB_ZUC256_EIA3:
-        FLUSH_JOB_ZUC_EIA3 256
+        endbranch64
+        cmp     arg2, 8
+        je      flush_tag_8B
+        jb      flush_tag_4B
+
+        ; Fall-through for 16-byte tag
+flush_tag_16B:
+        FLUSH_JOB_ZUC_EIA3 256, 16
+        ret
+
+flush_tag_8B:
+        FLUSH_JOB_ZUC_EIA3 256, 8
+        ret
+
+flush_tag_4B:
+        FLUSH_JOB_ZUC_EIA3 256, 4
+        ret
 
 mksection stack-noexec

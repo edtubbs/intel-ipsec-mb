@@ -1,13 +1,20 @@
 [![Coverity Status](https://scan.coverity.com/projects/16449/badge.svg)](https://scan.coverity.com/projects/intel-ipsec-mb)
-![Linux Build Status](https://github.com/intel/intel-ipsec-mb/actions/workflows/linux_make.yml/badge.svg)
+![Linux Build Shared gcc](https://github.com/intel/intel-ipsec-mb/actions/workflows/linux_build_shared_gcc.yml/badge.svg)
+![Linux Build Static gcc](https://github.com/intel/intel-ipsec-mb/actions/workflows/linux_build_static_gcc.yml/badge.svg)
+![Linux Build Shared clang](https://github.com/intel/intel-ipsec-mb/actions/workflows/linux_build_shared_clang.yml/badge.svg)
+![Linux Build Static clang](https://github.com/intel/intel-ipsec-mb/actions/workflows/linux_build_static_clang.yml/badge.svg)
+![Linux Build Shared clang AESNI emulation](https://github.com/intel/intel-ipsec-mb/actions/workflows/linux_build_shared_clang_aesni_emu.yml/badge.svg)
+![FreeBSD Build Shared clang](https://github.com/intel/intel-ipsec-mb/actions/workflows/freebsd_build_shared_clang.yml/badge.svg)
+![FreeBSD Build Shared gcc](https://github.com/intel/intel-ipsec-mb/actions/workflows/freebsd_build_shared_gcc.yml/badge.svg)
 
 # Intel(R) Multi-Buffer Crypto for IPsec Library
 
 The library provides software crypto acceleration primarily targeting packet processing
 applications. It can be used for application such as: IPsec, TLS, Wireless (RAN), Cable or MPEG DRM.
 
-The library is used as software crypto provider in [DPDK](https://www.dpdk.org/),
-[Intel(R) QAT Engine](https://github.com/intel/QAT_Engine) and [FD.io](https://fd.io/).
+The library is hosted on [GitHub](https://github.com/intel/intel-ipsec-mb) and is used as software crypto
+provider in [DPDK](https://www.dpdk.org/), [Intel(R) QAT Engine](https://github.com/intel/QAT_Engine)
+and [FD.io](https://fd.io/).
 
 Using crypto interfaces from the above frameworks gives freedom to change providers
 without subsequent application modifications. The library can also be used directly
@@ -28,12 +35,13 @@ Contents
 2. Processor Extensions
 3. Recommendations
 4. Package Content
-5. Compilation
-6. Security Considerations & Options for Increased Security
-7. Installation
-8. Backwards compatibility
-9. Disclaimer (ZUC, KASUMI, SNOW3G)
-10. Legal Disclaimer
+5. Documentation
+6. Compilation
+7. Security Considerations & Options for Increased Security
+8. Installation
+9. Backwards compatibility
+10. Disclaimer (ZUC, KASUMI, SNOW3G)
+11. Legal Disclaimer
 
 1\. Overview
 ============
@@ -66,9 +74,9 @@ Table 1. List of supported cipher algorithms and their implementations.
 | AES128-CTR     | N      | Y  by8 | Y  by8 | N      | N      | Y by16 |
 | AES192-CTR     | N      | Y  by8 | Y  by8 | N      | N      | Y by16 |
 | AES256-CTR     | N      | Y  by8 | Y  by8 | N      | N      | Y by16 |
-| AES128-ECB     | N      | Y  by4 | Y  by4 | N      | N      | N      |
-| AES192-ECB     | N      | Y  by4 | Y  by4 | N      | N      | N      |
-| AES256-ECB     | N      | Y  by4 | Y  by4 | N      | N      | N      |
+| AES128-ECB     | N      | Y(1)   | Y  by8 | Y(10)  | N      | Y by16 |
+| AES192-ECB     | N      | Y(1)   | Y  by8 | Y(10)  | N      | Y by16 |
+| AES256-ECB     | N      | Y(1)   | Y  by8 | Y(10)  | N      | Y by16 |
 | NULL           | Y      | N      | N      | N      | N      | N      |
 | AES128-DOCSIS  | N      | Y(2)   | Y(4)   | N      | Y(7)   | Y(8)   |
 | AES256-DOCSIS  | N      | Y(2)   | Y(4)   | N      | Y(7)   | Y(8)   |
@@ -78,7 +86,7 @@ Table 1. List of supported cipher algorithms and their implementations.
 | KASUMI-F8      | Y      | N      | N      | N      | N      | N      |
 | ZUC-EEA3       | N      | Y  x4  | Y  x4  | Y  x8  | Y  x16 | Y  x16 |
 | ZUC-EEA3-256   | N      | Y  x4  | Y  x4  | Y  x8  | Y  x16 | Y  x16 |
-| SNOW3G-UEA2    | N      | Y      | Y      | Y      | Y  x16 | Y  x16 |
+| SNOW3G-UEA2    | N      | Y  x4  | Y      | Y      | Y  x16 | Y  x16 |
 | AES128-CBCS(9) | N      | Y(1)   | Y(3)   | N      | N      | Y(6)   |
 | Chacha20       | N      | Y      | Y      | Y      | Y      | N      |
 | Chacha20 AEAD  | N      | Y      | Y      | Y      | Y      | N      |
@@ -96,6 +104,8 @@ Notes:
 (7)   - same as AES128-CBC for AVX, combines cipher and CRC32  
 (8)   - decryption is by16 and encryption is x16  
 (9)   - currently 1:9 crypt:skip pattern supported  
+(10)  - by default, decryption and encryption are AVX by8.  
+        On CPUs supporting VAES, decryption and encryption are AVX2-VAES by16.  
 
 Legend:  
 ` byY` - single buffer Y blocks at a time  
@@ -121,6 +131,11 @@ Table 2. List of supported integrity algorithms and their implementations.
 | HMAC-SHA2-256_128 | N      | Y(2)x4 | Y   x4 | Y   x8 | Y  x16 | N      |
 | HMAC-SHA2-384_192 | N      | Y   x2 | Y   x2 | Y   x4 | Y   x8 | N      |
 | HMAC-SHA2-512_256 | N      | Y   x2 | Y   x2 | Y   x4 | Y   x8 | N      |
+| SHA1              | N      | Y(2)x4 | Y   x4 | Y   x8 | Y  x16 | N      |
+| SHA2-224          | N      | Y(2)x4 | Y   x4 | Y   x8 | Y  x16 | N      |
+| SHA2-256          | N      | Y(2)x4 | Y   x4 | Y   x8 | Y  x16 | N      |
+| SHA2-384          | N      | Y   x2 | Y   x2 | Y   x4 | Y   x8 | N      |
+| SHA2-512          | N      | Y   x2 | Y   x2 | Y   x4 | Y   x8 | N      |
 | AES128-GMAC       | N      | Y  by8 | Y  by8 | Y  by8 | Y  by8 | Y by48 |
 | AES192-GMAC       | N      | Y  by8 | Y  by8 | Y  by8 | Y  by8 | Y by48 |
 | AES256-GMAC       | N      | Y  by8 | Y  by8 | Y  by8 | Y  by8 | Y by48 |
@@ -131,16 +146,16 @@ Table 2. List of supported integrity algorithms and their implementations.
 | AES256-CMAC-96    | Y      | Y(5)x4 | Y   x8 | N      | N      | Y x16  |
 | KASUMI-F9         | Y      | N      | N      | N      | N      | N      |
 | ZUC-EIA3          | N      | Y  x4  | Y  x4  | Y  x8  | Y  x16 | Y  x16 |
-| ZUC-EIA3-256(6)   | N      | Y  x4  | Y  x4  | Y  x8  | Y  x16 | Y  x16 |
-| SNOW3G-UIA2(9)    | N      | Y by4  | Y by4  | N      | Y by32 | Y by32 |
+| ZUC-EIA3-256      | N      | Y  x4  | Y  x4  | Y  x8  | Y  x16 | Y  x16 |
+| SNOW3G-UIA2(8)    | N      | Y by4  | Y by4  | N      | Y by32 | Y by32 |
 | DOCSIS-CRC32(4)   | N      | Y      | Y      | N      | Y      | Y      |
 | HEC               | N      | Y      | Y      | N      | N      | N      |
 | POLY1305          | Y      | N      | N      | N      | Y      | Y      |
 | POLY1305 AEAD     | Y      | N      | N      | N      | Y      | Y      |
 | SNOW-V AEAD       | N      | Y  by8 | Y  by8 | Y  by8 | Y  by8 | Y by48 |
 | GHASH             | N      | Y  by8 | Y  by8 | Y  by8 | Y  by8 | Y by48 |
-| CRC(7)            | N      | Y  by8 | Y  by8 | N      | N      | Y by16 |
-| PON-CRC-BIP(8)    | N      | Y      | Y      | N      | N      | Y      |
+| CRC(6)            | N      | Y  by8 | Y  by8 | N      | N      | Y by16 |
+| PON-CRC-BIP(7)    | N      | Y      | Y      | N      | N      | Y      |
 +-------------------------------------------------------------------------+
 ```
 Notes:  
@@ -149,8 +164,7 @@ Notes:
 (3) - AVX512 plus VAES, VPCLMULQDQ, GFNI and IFMA extensions  
 (4) - used only with AES256-DOCSIS and AES128-DOCSIS ciphers  
 (5) - x8 on selected CPU's supporting GFNI  
-(6) - 4 byte tag size is supported only  
-(7) - Supported CRC types:
+(6) - Supported CRC types:
  - CRC32: Ethernet FCS, SCTP, WIMAX OFDMA  
  - CRC24: LTE A, LTE B  
  - CRC16: X25, FP data  
@@ -159,8 +173,8 @@ Notes:
  - CRC8: WIMAX OFDMA HCS  
  - CRC7: FP header  
  - CRC6: IUUP header  
-(8) - used only with PON-AES128-CTR cipher  
-(9) - x16 for init keystream generation, then by32
+(7) - used only with PON-AES128-CTR cipher  
+(8) - x4/x16 for init keystream generation, then by4/by32  
 
 Legend:  
 ` byY`- single buffer Y blocks at a time  
@@ -246,17 +260,19 @@ Legacy or to be avoided algorithms listed in the table below are implemented
 in the library in order to support legacy applications. Please use corresponding
 alternative algorithms instead.
 ```
-+-------------------------------------------------------------+
-| # | Algorithm          | Recommendation | Alternative       |
-|---+--------------------+----------------+-------------------|
-| 1 | DES encryption     | Avoid          | AES encryption    |
-|---+--------------------+----------------+-------------------|
-| 2 | 3DES encryption    | Avoid          | AES encryption    |
-|---+--------------------+----------------+-------------------|
-| 3 | HMAC-MD5 integrity | Legacy         | HMAC-SHA1         |
-|---+--------------------+----------------+-------------------|
-| 4 | AES-ECB encryption | Avoid          | AES-CBC, AES-CNTR |
-+-------------------------------------------------------------+
++--------------------------------------------------------------+
+| # | Algorithm           | Recommendation | Alternative       |
+|---+---------------------+----------------+-------------------|
+| 1 | DES encryption      | Avoid          | AES encryption    |
+|---+---------------------+----------------+-------------------|
+| 2 | 3DES encryption     | Avoid          | AES encryption    |
+|---+---------------------+----------------+-------------------|
+| 3 | HMAC-MD5 integrity  | Legacy         | HMAC-SHA256       |
+|---+---------------------+----------------+-------------------|
+| 4 | AES-ECB encryption  | Avoid          | AES-CBC, AES-CNTR |
+|---+---------------------+----------------+-------------------|
+| 3 | HMAC-SHA1 integrity | Avoid          | HMAC-SHA256       |
++--------------------------------------------------------------+
 ```
 Intel(R) Multi-Buffer Crypto for IPsec Library depends on C library and
 it is recommended to use its latest version.
@@ -285,8 +301,15 @@ Code taken from the tip of the master branch should not be considered fit for pr
 Refer to the releases tab for stable code versions:  
 https://github.com/intel/intel-ipsec-mb/releases
 
+5\. Documentation
+===============
 
-5\. Compilation
+Full documentation can be found at: https://intel.github.io/intel-ipsec-mb
+
+To generate documentation locally, run:  
+`> make doxy`
+
+6\. Compilation
 ===============
 
 Linux (64-bit only)
@@ -310,6 +333,9 @@ or
 
 Build with debugging information:  
 `> make DEBUG=y`
+
+Build with AESNI emulation support (disabled by default):  
+`> make AESNI_EMU=y`
 
 **Note:** Building with debugging information is not advised for production use.
 
@@ -343,11 +369,17 @@ Build without safety features:
 - SAFE_DATA clears sensitive information stored temporarily on stack, registers or internal data structures  
 - SAFE_PARAM adds extra checks on input parameters  
 - SAFE_LOOKUP uses constant-time lookups (enabled by default)  
+- SAFE_OPTIONS additional option to disable all safe options. Enabled by default.  
+  Disable to turn off: SAFE_DATA, SAFE_PARAM and SAFE_LOOKUP.  
 
 `> nmake /f win_x64.mak SAFE_DATA=n SAFE_PARAM=n`
+`> nmake /f win_x64.mak SAFE_OPTIONS=n`
 
 Build with debugging information:   
 `> nmake /f win_x64.mak DEBUG=y`
+
+Build with AESNI emulation support (disabled by default):   
+`> nmake /f win_x64.mak AESNI_EMU=y`
 
 **Note:** Building with debugging information is not advised for production use.
 
@@ -408,7 +440,7 @@ Build with debugging information:
 For more build options and their explanation run:   
 `> gmake help`
 
-6\. Security Considerations & Options for Increased Security
+7\. Security Considerations & Options for Increased Security
 ============================================================
 
 ### Security Considerations
@@ -477,6 +509,12 @@ If SAFE_LOOKUP is not enabled in the build (e.g. make SAFE_LOOKUP=n) then the
 algorithms listed above may be susceptible to timing attacks which could expose
 the cryptographic key.
 
+### SAFE_OPTIONS
+SAFE_OPTIONS is a parameter that can be used to disable/enable
+all supported safe options (i.e. SAFE_DATA, SAFE_PARAM, SAFE_LOOKUP).
+It is set to `y` by default and all safe options are enabled.
+`SAFE_OPTIONS=n` disables all safe options.
+
 ### Security API
 **Force clearing/zeroing of memory**
 ```c
@@ -492,7 +530,7 @@ The library GCM and GMAC implementation provides flexibility as to tag size sele
 As explained in [NIST Special Publication 800-38D](https://csrc.nist.gov/publications/detail/sp/800-38d/final) section 5.2.1.2 and Appendix C, using tag sizes shorter than 96 bits can be insecure.
 Please refer to the aforementioned sections to understand the details, trade offs and mitigations of using shorter tag sizes.
 
-7\. Installation
+8\. Installation
 ================
 
 Linux (64-bit only)
@@ -549,7 +587,7 @@ If there is no need to run ldconfig at install stage please use NOLDCONFIG=y opt
 If library was compiled as an archive (not a default option) then install it using SHARED=n option:   
 `> sudo gmake install SHARED=n`
 
-8\. Backwards compatibility
+9\. Backwards compatibility
 ===========================
 
 In version 0.54, some symbols have been renamed to avoid too generic names (such as cipher modes or
@@ -565,7 +603,7 @@ For applications which face symbol conflicts due to these old generic names,
 they should be compiled with the flag -DNO_COMPAT_IMB_API_053, which will
 not export the old symbols.
 
-9\. Disclaimer (ZUC, KASUMI, SNOW3G)
+10\. Disclaimer (ZUC, KASUMI, SNOW3G)
 ====================================
 
 Please note that cryptographic material, such as ciphering algorithms, may be
@@ -577,7 +615,7 @@ For more details please see:
 - GSMA https://www.gsma.com/security/security-algorithms/  
 - ETSI https://www.etsi.org/security-algorithms-and-codes/cellular-algorithm-licences
 
-10\. Legal Disclaimer
+11\. Legal Disclaimer
 ====================
 
 THIS SOFTWARE IS PROVIDED BY INTEL"AS IS". NO LICENSE, EXPRESS OR   

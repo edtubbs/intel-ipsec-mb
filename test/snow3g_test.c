@@ -1,5 +1,6 @@
 /*****************************************************************************
- Copyright (c) 2009-2021, Intel Corporation
+ Copyright (c) 2009-2022, Intel Corporation
+ Copyright (c) 2022, Nokia
 
  Redistribution and use in source and binary forms, with or without
  modification, are permitted provided that the following conditions are met:
@@ -70,6 +71,15 @@ validate_snow3g_f8_n_blocks(struct IMB_MGR *mb_mgr, uint32_t job_api,
                             struct test_suite_context *uea2_ctx,
                             struct test_suite_context *uia2_ctx);
 static void
+validate_snow3g_f8_n_blocks_linear(struct IMB_MGR *mb_mgr, uint32_t job_api,
+                                   struct test_suite_context *uea2_ctx,
+                                   struct test_suite_context *uia2_ctx);
+static void
+validate_snow3g_f8_n_blocks_linear_mkeys(struct IMB_MGR *mb_mgr,
+                                         uint32_t job_api,
+                                         struct test_suite_context *uea2_ctx,
+                                         struct test_suite_context *uia2_ctx);
+static void
 validate_snow3g_f8_n_blocks_multi(struct IMB_MGR *mb_mgr,
                                   uint32_t job_api,
                                   struct test_suite_context *uea2_ctx,
@@ -99,6 +109,10 @@ struct {
          "validate_snow3g_f8_8_blocks_multi_key"},
         {validate_snow3g_f8_n_blocks,
          "validate_snow3g_f8_n_blocks"},
+        {validate_snow3g_f8_n_blocks_linear,
+         "validate_snow3g_f8_n_blocks_linear"},
+        {validate_snow3g_f8_n_blocks_linear_mkeys,
+         "validate_snow3g_f8_n_blocks_linear_multi_keys"},
         {validate_snow3g_f8_n_blocks_multi,
          "validate_snow3g_f8_n_blocks_multi"},
         {validate_snow3g_f9,
@@ -156,7 +170,7 @@ submit_uea2_jobs(struct IMB_MGR *mb_mgr, uint8_t **keys, uint8_t **ivs,
                 if (job != NULL) {
                         jobs_rx++;
                         if (job->status != IMB_STATUS_COMPLETED) {
-                                printf("%d error status:%d, job %d",
+                                printf("%d error status:%d, job %u",
                                        __LINE__, job->status, i);
                                 return -1;
                         }
@@ -166,14 +180,14 @@ submit_uea2_jobs(struct IMB_MGR *mb_mgr, uint8_t **keys, uint8_t **ivs,
         while ((job = IMB_FLUSH_JOB(mb_mgr)) != NULL) {
                 jobs_rx++;
                 if (job->status != IMB_STATUS_COMPLETED) {
-                        printf("%d error status:%d, job %d",
+                        printf("%d error status:%d, job %u",
                                __LINE__, job->status, i);
                         return -1;
                 }
         }
 
         if (jobs_rx != num_jobs) {
-                printf("Expected %d jobs, received %d\n", num_jobs, jobs_rx);
+                printf("Expected %u jobs, received %u\n", num_jobs, jobs_rx);
                 return -1;
         }
 
@@ -446,7 +460,7 @@ validate_snow3g_f8_1_bitblock(struct IMB_MGR *mb_mgr,
                               struct test_suite_context *uea2_ctx,
                               struct test_suite_context *uia2_ctx)
 {
-        int i, length;
+        int i;
         size_t size = 0;
         cipherbit_test_linear_vector_t *testVectors =
                 &snow3g_f8_linear_bitvectors /*snow3g_cipher_test_vectors[1]*/;
@@ -458,7 +472,7 @@ validate_snow3g_f8_1_bitblock(struct IMB_MGR *mb_mgr,
 
         snow3g_key_schedule_t *pKeySched = NULL;
         uint8_t *pKey = NULL;
-        int keyLen = MAX_KEY_LEN;
+        const int keyLen = MAX_KEY_LEN;
         uint8_t srcBuff[MAX_DATA_LEN];
         uint8_t midBuff[MAX_DATA_LEN];
         uint8_t dstBuff[MAX_DATA_LEN];
@@ -474,6 +488,9 @@ validate_snow3g_f8_1_bitblock(struct IMB_MGR *mb_mgr,
 #endif
 
         memset(padding, -1, sizeof(padding));
+        memset(srcBuff, 0, sizeof(srcBuff));
+        memset(midBuff, 0, sizeof(midBuff));
+        memset(dstBuff, 0, sizeof(dstBuff));
 
         pIV = malloc(SNOW3G_IV_LEN_IN_BYTES);
         if (!pIV) {
@@ -505,214 +522,167 @@ validate_snow3g_f8_1_bitblock(struct IMB_MGR *mb_mgr,
                 uint8_t *srcBufAftPad = srcBuff + PAD_LEN;
                 uint8_t *dstBufBefPad = dstBuff;
                 uint8_t *dstBufAftPad = dstBuff + PAD_LEN;
+                uint32_t head_offset;
 
-                const uint32_t byte_len =
-                        (testVectors->dataLenInBits[i] + 7) / 8;
-                uint32_t bit_len = testVectors->dataLenInBits[i];
-                uint32_t head_offset = i % 8;
-                const uint32_t tail_offset = (head_offset + bit_len) % 8;
-                const uint32_t final_byte_offset = (bit_len + head_offset) / 8;
-                const uint32_t byte_len_with_offset =
-                        (bit_len + head_offset + 7) / 8;
+                for (head_offset = 0; head_offset < 8; head_offset++) {
+                        uint32_t byte_len, bit_len, tail_offset,
+                                final_byte_offset;
 
-                memcpy(pKey, testVectors->key[i], testVectors->keyLenInBytes);
-                memcpy(pIV, testVectors->iv[i], testVectors->ivLenInBytes);
-                copy_test_bufs(srcBufBefPad, midBufBefPad, dstBufBefPad,
-                               testVectors->plaintext[i],
-                               testVectors->ciphertext[i],
-                               byte_len);
+                        memcpy(pKey, testVectors->key[i],
+                               testVectors->keyLenInBytes);
+                        memcpy(pIV, testVectors->iv[i],
+                               testVectors->ivLenInBytes);
 
-                /* shift buffers by offset for this round */
-                buffer_shift_right(srcBufBefPad, (byte_len + PAD_LEN * 2) * 8,
-                                   head_offset);
-                buffer_shift_right(dstBufBefPad, (byte_len + PAD_LEN * 2) * 8,
-                                   head_offset);
+                        if (head_offset != 0) {
+                                bit_len = testVectors->dataLenInBits[i];
+                                byte_len = (bit_len + 7) / 8;
+                                tail_offset = (head_offset + bit_len) % 8;
+                                final_byte_offset = (bit_len + head_offset) / 8;
 
-                /*setup the keysched to be used*/
-                if (IMB_SNOW3G_INIT_KEY_SCHED(mb_mgr, pKey, pKeySched) == -1) {
-                        printf("CPU check failed\n");
-                        goto snow3g_f8_1_buffer_bit_exit;
-                }
+                                copy_test_bufs(srcBufBefPad, midBufBefPad,
+                                               dstBufBefPad,
+                                               testVectors->plaintext[i],
+                                               testVectors->ciphertext[i],
+                                               byte_len);
 
-                /*Validate Encrypt*/
-                if (job_api)
-                        submit_uea2_jobs(mb_mgr, (uint8_t **)&pKeySched,
-                                         &pIV, &srcBufAftPad, &midBufAftPad,
-                                         &bit_len, &head_offset,
-                                         IMB_DIR_ENCRYPT, 1);
-                else
-                        IMB_SNOW3G_F8_1_BUFFER_BIT(mb_mgr, pKeySched, pIV,
-                                                   srcBufAftPad, midBufAftPad,
-                                                   bit_len, head_offset);
+                                /* shift buffers by offset for this round */
+                                buffer_shift_right(srcBufBefPad,
+                                                   (byte_len + PAD_LEN * 2) * 8,
+                                                   head_offset);
+                                buffer_shift_right(dstBufBefPad,
+                                                   (byte_len + PAD_LEN * 2) * 8,
+                                                   head_offset);
+                        } else {
+                                byte_len =
+                                        testStandardVectors[i].dataLenInBytes;
+                                final_byte_offset = byte_len;
+                                bit_len = byte_len * 8;
+                                tail_offset = bit_len % 8;
+                                memcpy(srcBuff,
+                                       testStandardVectors[i].plaintext,
+                                       byte_len);
+                                memcpy(dstBuff,
+                                       testStandardVectors[i].ciphertext,
+                                       byte_len);
+                        }
 
-                /*check against the ciphertext in the vector against the
-                 * encrypted plaintext*/
-                if (membitcmp(midBufAftPad, dstBufAftPad,
-                              bit_len, head_offset) != 0) {
-                        printf("Test1: snow3g_f8_1_bitbuffer(Enc) buffer:%d "
-                               "size:%d offset:%d\n", i, bit_len, head_offset);
-                        snow3g_hexdump("Actual:", midBufAftPad,
-                                       byte_len_with_offset);
-                        snow3g_hexdump("Expected:", dstBufAftPad,
-                                       byte_len_with_offset);
-                        goto snow3g_f8_1_buffer_bit_exit;
-                }
+                        /*setup the keysched to be used*/
+                        if (IMB_SNOW3G_INIT_KEY_SCHED(mb_mgr, pKey,
+                                                      pKeySched) == -1) {
+                                printf("SNOW3G init key schedule failed\n");
+                                goto snow3g_f8_1_buffer_bit_exit;
+                        }
 
-                /* Check that data not to be ciphered was not overwritten */
-                if (membitcmp(midBufBefPad, padding,
-                              (PAD_LEN * 8) + head_offset, 0)) {
-                        printf("overwrite head\n");
-                        snow3g_hexdump("Head", midBufBefPad, PAD_LEN + 1);
-                        goto snow3g_f8_1_buffer_bit_exit;
-                }
+                        /*Validate Encrypt*/
+                        if (job_api)
+                                submit_uea2_jobs(mb_mgr, (uint8_t **)&pKeySched,
+                                                 &pIV, &srcBufAftPad,
+                                                 &midBufAftPad,
+                                                 &bit_len, &head_offset,
+                                                 IMB_DIR_ENCRYPT, 1);
+                        else
+                                IMB_SNOW3G_F8_1_BUFFER_BIT(mb_mgr, pKeySched,
+                                                           pIV, srcBufAftPad,
+                                                           midBufAftPad,
+                                                           bit_len,
+                                                           head_offset);
 
-                if (membitcmp(midBufAftPad + final_byte_offset, padding,
-                              (PAD_LEN * 8) - tail_offset, tail_offset)) {
-                        printf("overwrite tail\n");
-                        snow3g_hexdump("Tail", midBufAftPad + final_byte_offset,
-                                       PAD_LEN + 1);
-                        goto snow3g_f8_1_buffer_bit_exit;
-                }
+                        /*
+                         * Check against the ciphertext in the vector against
+                         * the encrypted plaintext
+                         */
+                        if (membitcmp(midBufAftPad, dstBufAftPad,
+                                      bit_len, head_offset) != 0) {
+                                const uint32_t byte_len_with_offset =
+                                        (bit_len + head_offset + 7) / 8;
 
-                /* reset working buffer */
-                memset(midBufBefPad, -1, (byte_len + PAD_LEN * 2));
+                                printf("Test1: snow3g_f8_1_bitbuffer(Enc) "
+                                       "buffer:%d size:%u bit offset:%u\n",
+                                       i, bit_len, head_offset);
+                                snow3g_hexdump("Actual:", midBufAftPad,
+                                               byte_len_with_offset);
+                                snow3g_hexdump("Expected:", dstBufAftPad,
+                                               byte_len_with_offset);
+                                goto snow3g_f8_1_buffer_bit_exit;
+                        }
 
-                /*Validate Decrypt*/
-                if (job_api)
-                        submit_uea2_jobs(mb_mgr, (uint8_t **)&pKeySched,
-                                         &pIV, &dstBufAftPad, &midBufAftPad,
-                                         &bit_len, &head_offset,
-                                         IMB_DIR_DECRYPT, 1);
-                else
-                        IMB_SNOW3G_F8_1_BUFFER_BIT(mb_mgr, pKeySched, pIV,
-                                                   dstBufAftPad, midBufAftPad,
-                                                   bit_len, head_offset);
+                        /*
+                         * Check that data not to be ciphered wasn't
+                         * overwritten
+                         */
+                        if (membitcmp(midBufBefPad, padding,
+                                      (PAD_LEN * 8) + head_offset, 0)) {
+                                printf("overwrite head\n");
+                                snow3g_hexdump("Head", midBufBefPad,
+                                               PAD_LEN + 1);
+                                goto snow3g_f8_1_buffer_bit_exit;
+                        }
 
-                if (membitcmp(midBufAftPad, srcBufAftPad, bit_len,
-                              head_offset) != 0) {
-                        printf("Test2: snow3g_f8_1_bitbuffer(Dec) buffer:%d "
-                               "size:%d offset:%d\n", i, bit_len, head_offset);
-                        snow3g_hexdump("Actual:", midBufAftPad,
-                                       byte_len_with_offset);
-                        snow3g_hexdump("Expected:", srcBufAftPad,
-                                       byte_len_with_offset);
-                        goto snow3g_f8_1_buffer_bit_exit;
-                }
+                        if (membitcmp(midBufAftPad + final_byte_offset, padding,
+                                      (PAD_LEN * 8) - tail_offset,
+                                      tail_offset)) {
+                                printf("overwrite tail\n");
+                                snow3g_hexdump("Tail",
+                                               midBufAftPad + final_byte_offset,
+                                               PAD_LEN + 1);
+                                goto snow3g_f8_1_buffer_bit_exit;
+                        }
 
-                /* Check that data not to be ciphered was not overwritten */
-                if (membitcmp(midBufBefPad, padding,
-                              (PAD_LEN * 8) + head_offset, 0)) {
-                        printf("overwrite head\n");
-                        snow3g_hexdump("Head", midBufBefPad, PAD_LEN + 1);
-                        goto snow3g_f8_1_buffer_bit_exit;
-                }
-                if (membitcmp(midBufAftPad + final_byte_offset, padding,
-                              (PAD_LEN * 8) - tail_offset, tail_offset)) {
-                        printf("overwrite tail\n");
-                        snow3g_hexdump("Tail", midBufAftPad + final_byte_offset,
-                                       PAD_LEN + 1);
-                        goto snow3g_f8_1_buffer_bit_exit;
-                }
+                        /* reset working buffer */
+                        memset(midBufBefPad, -1, (byte_len + PAD_LEN * 2));
 
-                /* Another test with Standard 3GPP table */
-                head_offset = 0;
-                length = testStandardVectors[i].dataLenInBytes;
-                bit_len = length * 8;
-                memcpy(srcBuff, testStandardVectors[i].plaintext, length);
-                memcpy(dstBuff, testStandardVectors[i].ciphertext, length);
+                        /*Validate Decrypt*/
+                        if (job_api)
+                                submit_uea2_jobs(mb_mgr, (uint8_t **)&pKeySched,
+                                                 &pIV, &dstBufAftPad,
+                                                 &midBufAftPad,
+                                                 &bit_len, &head_offset,
+                                                 IMB_DIR_DECRYPT, 1);
+                        else
+                                IMB_SNOW3G_F8_1_BUFFER_BIT(mb_mgr, pKeySched,
+                                                           pIV, dstBufAftPad,
+                                                           midBufAftPad,
+                                                           bit_len,
+                                                           head_offset);
 
-                /*Validate Encrypt*/
-                if (job_api)
-                        submit_uea2_jobs(mb_mgr, (uint8_t **)&pKeySched,
-                                         &pIV, &srcBufBefPad, &midBufBefPad,
-                                         &bit_len, &head_offset,
-                                         IMB_DIR_ENCRYPT, 1);
-                else
-                        IMB_SNOW3G_F8_1_BUFFER_BIT(mb_mgr, pKeySched, pIV,
-                                                   srcBuff, midBuff,
-                                                   bit_len, head_offset);
+                        if (membitcmp(midBufAftPad, srcBufAftPad, bit_len,
+                                      head_offset) != 0) {
+                                const uint32_t byte_len_with_offset =
+                                        (bit_len + head_offset + 7) / 8;
 
-                /*check against the ciphertext in the vector against the
-                 * encrypted plaintext*/
-                if (membitcmp(midBuff, dstBuff, bit_len, 0) != 0) {
-                        printf("Test3: snow3g_f8_1_bitbuffer(Enc) buffer:%d "
-                               "size:%d offset:0\n", i, bit_len);
-                        snow3g_hexdump("Actual:", &midBuff[0], length);
-                        snow3g_hexdump("Expected:", &dstBuff[0], length);
-                        goto snow3g_f8_1_buffer_bit_exit;
-                }
+                                printf("Test2: snow3g_f8_1_bitbuffer(Dec) "
+                                       "buffer:%d size:%u bit offset:%u\n",
+                                       i, bit_len, head_offset);
+                                snow3g_hexdump("Actual:", midBufAftPad,
+                                               byte_len_with_offset);
+                                snow3g_hexdump("Expected:", srcBufAftPad,
+                                               byte_len_with_offset);
+                                goto snow3g_f8_1_buffer_bit_exit;
+                        }
 
-                /*Validate Decrypt*/
-                if (job_api) {
-                        submit_uea2_jobs(mb_mgr, (uint8_t **)&pKeySched,
-                                         &pIV, &midBufBefPad, &dstBufBefPad,
-                                         &bit_len, &head_offset,
-                                         IMB_DIR_DECRYPT, 1);
-                } else
-                        IMB_SNOW3G_F8_1_BUFFER_BIT(mb_mgr, pKeySched, pIV,
-                                                   midBuff, dstBuff,
-                                                   bit_len, head_offset);
+                        /*
+                         * Check that data not to be ciphered was not
+                         * overwritten
+                         */
+                        if (membitcmp(midBufBefPad, padding,
+                                      (PAD_LEN * 8) + head_offset, 0)) {
+                                printf("overwrite head\n");
+                                snow3g_hexdump("Head", midBufBefPad,
+                                               PAD_LEN + 1);
+                                goto snow3g_f8_1_buffer_bit_exit;
+                        }
 
-                if (membitcmp(dstBuff, srcBuff, bit_len, 0) != 0) {
-                        printf("Test4: snow3g_f8_1_bitbuffer(Dec) buffer:%d "
-                               "size:%d offset:0\n", i, bit_len);
-                        snow3g_hexdump("Actual:", &dstBuff[0], length);
-                        snow3g_hexdump("Expected:", &srcBuff[0], length);
-                        goto snow3g_f8_1_buffer_bit_exit;
-                }
+                        if (membitcmp(midBufAftPad + final_byte_offset, padding,
+                                      (PAD_LEN * 8) - tail_offset,
+                                      tail_offset)) {
+                                printf("overwrite tail\n");
+                                snow3g_hexdump("Tail",
+                                               midBufAftPad + final_byte_offset,
+                                               PAD_LEN + 1);
+                                goto snow3g_f8_1_buffer_bit_exit;
+                        }
+                } /* head_offset = 0..7 */
 
-                memcpy(srcBuff, testStandardVectors[i].plaintext, length);
-
-                memcpy(dstBuff, testStandardVectors[i].ciphertext, length);
-
-                buffer_shift_right(srcBuff, length, 4);
-                buffer_shift_right(dstBuff, length, 4);
-
-                /*Validate Encrypt with offset */
-                head_offset = 4;
-
-                if (job_api)
-                        submit_uea2_jobs(mb_mgr, (uint8_t **)&pKeySched,
-                                         &pIV, &srcBufBefPad, &midBufBefPad,
-                                         &bit_len, &head_offset,
-                                         IMB_DIR_ENCRYPT, 1);
-                else
-                        IMB_SNOW3G_F8_1_BUFFER_BIT(mb_mgr, pKeySched, pIV,
-                                                   srcBuff, midBuff,
-                                                   bit_len, head_offset);
-
-                /*check against the ciphertext in the vector against the
-                 * encrypted plaintext*/
-                if (membitcmp(midBuff, dstBuff, bit_len, 4) != 0) {
-                        printf("Test5:snow3g_f8_1_bitbuffer(Enc) buffer:%d "
-                               "size:%d offset:4\n", i, bit_len);
-                        snow3g_hexdump("Actual:", &midBuff[0],
-                                       (length * 8 + 4 + 7) / 8);
-                        snow3g_hexdump("Expected:", &dstBuff[0],
-                                       (length * 8 + 4 + 7) / 8);
-                        goto snow3g_f8_1_buffer_bit_exit;
-                }
-
-                /*Validate Decrypt*/
-                if (job_api)
-                        submit_uea2_jobs(mb_mgr, (uint8_t **)&pKeySched,
-                                         &pIV, &dstBufBefPad, &midBufBefPad,
-                                         &bit_len, &head_offset,
-                                         IMB_DIR_DECRYPT, 1);
-                else
-                        IMB_SNOW3G_F8_1_BUFFER_BIT(mb_mgr, pKeySched, pIV,
-                                                   dstBuff, midBuff,
-                                                   bit_len, head_offset);
-
-                if (membitcmp(midBuff, srcBuff, bit_len, 4) != 0) {
-                        printf("Test6: snow3g_f8_1_bitbuffer(Dec) buffer:%d "
-                               "size:%d offset:4\n", i, bit_len);
-                        snow3g_hexdump("Actual:", &midBuff[0],
-                                       (length * 8 + 4 + 7) / 8);
-                        snow3g_hexdump("Expected:", &srcBuff[0],
-                                       (length * 8 + 4 + 7) / 8);
-                        goto snow3g_f8_1_buffer_bit_exit;
-                }
         }  /* for numVectors */
 
         /* no errors detected */
@@ -1929,21 +1899,21 @@ validate_snow3g_f8_n_blocks(struct IMB_MGR *mb_mgr, uint32_t job_api,
 
         for (i = 0; i < NUM_SUPPORTED_BUFFERS; i++) {
                 /*Test the encrypt*/
-                if (job_api)
+                if (job_api) {
                         submit_uea2_jobs(mb_mgr, (uint8_t **)&pKeySched,
                                          pIV, pSrcBuff, pDstBuff,
                                          bitLens, bitOffsets,
                                          IMB_DIR_ENCRYPT, i + 1);
-                else
+                } else {
                         IMB_SNOW3G_F8_N_BUFFER(mb_mgr, *pKeySched,
                                                (const void * const *)pIV,
                                                (const void * const *)pSrcBuff,
                                                (void **)pDstBuff,
                                                packetLen, i + 1);
-
-                if (pDstBuff[0] == NULL) {
-                        printf("N buffer failure\n");
-                        goto snow3g_f8_n_buffer_exit;
+                        if (pDstBuff[0] == NULL) {
+                                printf("N buffer failure\n");
+                                goto snow3g_f8_n_buffer_exit;
+                        }
                 }
 
                 /*Compare the data in the pDstBuff with the cipher pattern*/
@@ -1957,20 +1927,21 @@ validate_snow3g_f8_n_blocks(struct IMB_MGR *mb_mgr, uint32_t job_api,
                 }
 
                 /*Test the Decrypt*/
-                if (job_api)
+                if (job_api) {
                         submit_uea2_jobs(mb_mgr, (uint8_t **)&pKeySched,
                                          pIV, pSrcBuff, pDstBuff,
                                          bitLens, bitOffsets,
                                          IMB_DIR_DECRYPT, i + 1);
-                else
+                } else {
                         IMB_SNOW3G_F8_N_BUFFER(mb_mgr, *pKeySched,
                                                (const void * const *)pIV,
                                                (const void * const *)pDstBuff,
                                                (void **)pSrcBuff,
                                                packetLen, i + 1);
-                if (pSrcBuff[0] == NULL) {
-                        printf("N buffer failure\n");
-                        goto snow3g_f8_n_buffer_exit;
+                        if (pSrcBuff[0] == NULL) {
+                                printf("N buffer failure\n");
+                                goto snow3g_f8_n_buffer_exit;
+                        }
                 }
 
                 /*Compare the data in the pSrcBuff with the pDstBuff*/
@@ -2000,6 +1971,529 @@ snow3g_f8_n_buffer_exit:
                 if (pIV[i] != NULL)
                         free(pIV[i]);
         }
+
+        if (status < 0)
+                test_suite_update(uea2_ctx, 0, 1);
+        else
+                test_suite_update(uea2_ctx, 1, 0);
+}
+
+static void
+validate_snow3g_f8_n_blocks_linear(struct IMB_MGR *mb_mgr, uint32_t job_api,
+                                   struct test_suite_context *uea2_ctx,
+                                   struct test_suite_context *uia2_ctx)
+{
+        int length, numVectors, i, j, numPackets = 16;
+        size_t size = 0;
+        cipher_test_linear_vector_t *testVectors =
+            snow3g_cipher_test_vectors_linear[1];
+        /* snow3g f8 test vectors are located at index 1 */
+        numVectors = numSnow3gCipherTestVectorsLinear[1];
+
+        snow3g_key_schedule_t *pKeySched[NUM_SUPPORTED_BUFFERS];
+        uint8_t *pKey[NUM_SUPPORTED_BUFFERS];
+        uint8_t *pSrcBuff[NUM_SUPPORTED_BUFFERS];
+        uint8_t *pDstBuff[NUM_SUPPORTED_BUFFERS];
+        uint8_t *pSrcBuff_const[NUM_SUPPORTED_BUFFERS];
+        uint8_t *pDstBuff_const[NUM_SUPPORTED_BUFFERS];
+        uint8_t *pIV[NUM_SUPPORTED_BUFFERS];
+        uint32_t packetLen[NUM_SUPPORTED_BUFFERS];
+        uint32_t bitOffsets[NUM_SUPPORTED_BUFFERS];
+        uint32_t bitLens[NUM_SUPPORTED_BUFFERS];
+        int keyLen = MAX_KEY_LEN;
+        int status = 0;
+
+        (void)uia2_ctx;
+#ifdef DEBUG
+        printf("Testing IMB_SNOW3G_F8_N_BUFFER: (%s):\n",
+               job_api ? "Job API" : "Direct API");
+#endif
+        memset(pSrcBuff, 0, sizeof(pSrcBuff));
+        memset(pSrcBuff_const, 0, sizeof(pSrcBuff_const));
+        memset(pDstBuff, 0, sizeof(pDstBuff));
+        memset(pDstBuff_const, 0, sizeof(pDstBuff_const));
+        memset(pIV, 0, sizeof(pIV));
+        memset(pKey, 0, sizeof(pKey));
+        memset(packetLen, 0, sizeof(packetLen));
+        memset(pKeySched, 0, sizeof(pKeySched));
+
+        if (!numVectors) {
+                printf("No Snow3G test vectors found !\n");
+                status = -1;
+                goto snow3g_f8_n_buffer_linear_exit;
+        }
+
+        size = IMB_SNOW3G_KEY_SCHED_SIZE(mb_mgr);
+        if (!size) {
+                status = -1;
+                goto snow3g_f8_n_buffer_linear_exit;
+        }
+
+        /* Create test Data for num Packets*/
+        for (i = 0; i < numPackets; i++) {
+                /*vectors are in bits used to round up to bytes*/
+                length = testVectors[0].dataLenInBytes[i];
+
+                packetLen[i] = length;
+                bitLens[i] = length * 8;
+                bitOffsets[i] = 0;
+
+                pKey[i] = malloc(keyLen);
+                if (!pKey[i]) {
+                        printf("malloc(pKey[%d]):failed !\n", i);
+                        status = -1;
+                        goto snow3g_f8_n_buffer_linear_exit;
+                }
+                pKeySched[i] = malloc(size);
+                if (!pKeySched[i]) {
+                        printf("malloc(pKeySched[%d]): failed !\n", i);
+                        status = -1;
+                        goto snow3g_f8_n_buffer_linear_exit;
+                }
+                pSrcBuff[i] = malloc(length);
+                if (!pSrcBuff[i]) {
+                        printf("malloc(pSrcBuff[%d]):failed !\n", i);
+                        status = -1;
+                        goto snow3g_f8_n_buffer_linear_exit;
+                }
+                pDstBuff[i] = malloc(length);
+                if (!pDstBuff[i]) {
+                        printf("malloc(pDstBuff[%d]):failed !\n", i);
+                        status = -1;
+                        goto snow3g_f8_n_buffer_linear_exit;
+                }
+                pSrcBuff_const[i] = malloc(length);
+                if (!pSrcBuff_const[i]) {
+                        printf("malloc(pSrcBuff_const[%d]): failed !\n", i);
+                        status = -1;
+                        goto snow3g_f8_n_buffer_linear_exit;
+                }
+                pDstBuff_const[i] = malloc(length);
+                if (!pDstBuff_const[i]) {
+                        printf("malloc(pDstBuff_const[%d]): failed !\n", i);
+                        status = -1;
+                        goto snow3g_f8_n_buffer_linear_exit;
+                }
+                pIV[i] = malloc(SNOW3G_IV_LEN_IN_BYTES);
+                if (!pIV[i]) {
+                        printf("malloc(pIV[%d]):failed !\n", i);
+                        status = -1;
+                        goto snow3g_f8_n_buffer_linear_exit;
+                }
+
+                memcpy(pKey[i], testVectors[0].key[i],
+                       testVectors[0].keyLenInBytes);
+
+                memset(pSrcBuff[i], 0, length);
+                memcpy(pSrcBuff_const[i], testVectors[0].plaintext[i], length);
+
+                memset(pDstBuff[i], 0, length);
+                memcpy(pDstBuff_const[i], testVectors[0].ciphertext[i], length);
+
+                memcpy(pIV[i], testVectors[0].iv[i],
+                       testVectors[0].ivLenInBytes);
+
+                /* init key shed */
+                if (IMB_SNOW3G_INIT_KEY_SCHED(mb_mgr, pKey[i], pKeySched[i])) {
+                        printf("IMB_SNOW3G_INIT_KEY_SCHED(mb_mgr) error\n");
+                        status = -1;
+                        goto snow3g_f8_n_buffer_linear_exit;
+                }
+        }
+
+        for (i = 0; i < numPackets; i++) {
+                const char *fn_name = job_api ?
+                        "submit_uea2_jobs" : "IMB_SNOW3G_F8_N_BUFFER";
+
+                for (j = 0; j < i; j++) {
+                        /* Cleanup previous values */
+                        memset(pSrcBuff[j], 0, length);
+                        memset(pDstBuff[j], 0, length);
+                }
+
+                /*Test the encrypt*/
+                if (job_api) {
+                        submit_uea2_jobs(mb_mgr, (uint8_t **)&pKeySched, pIV,
+                                         pSrcBuff_const, pDstBuff, bitLens,
+                                         bitOffsets, IMB_DIR_ENCRYPT, i + 1);
+                } else {
+                        IMB_SNOW3G_F8_N_BUFFER(mb_mgr, *pKeySched,
+                                               (const void *const *)pIV,
+                                               (const void *const *)
+                                               pSrcBuff_const,
+                                               (void **)pDstBuff, packetLen,
+                                               i + 1);
+                        if (pDstBuff[0] == NULL) {
+                                printf("N buffer failure\n");
+                                status = -1;
+                                goto snow3g_f8_n_buffer_linear_exit;
+                        }
+                }
+
+                /*Compare the data in the pDstBuff with the cipher pattern*/
+                for (j = 0; j < i; j++) {
+                        if (memcmp(pDstBuff_const[j], pDstBuff[j],
+                                   packetLen[j]) != 0) {
+                                printf("%s(Enc) %s nb_packets:%d vector:%d\n",
+                                       fn_name, __func__, i, j);
+                                snow3g_hexdump("Actual:", pDstBuff[j],
+                                               packetLen[j]);
+                                snow3g_hexdump("Expected:", pDstBuff_const[j],
+                                               packetLen[j]);
+                                status = -1;
+                        }
+                }
+
+                /*Test the Decrypt*/
+                if (job_api) {
+                        submit_uea2_jobs(mb_mgr, (uint8_t **)&pKeySched, pIV,
+                                         pDstBuff_const, pSrcBuff, bitLens,
+                                         bitOffsets, IMB_DIR_DECRYPT, i + 1);
+                } else {
+                        IMB_SNOW3G_F8_N_BUFFER(mb_mgr, *pKeySched,
+                                               (const void *const *)pIV,
+                                               (const void *const *)
+                                               pDstBuff_const,
+                                               (void **)pSrcBuff, packetLen,
+                                               i + 1);
+                        if (pSrcBuff[0] == NULL) {
+                                status = -1;
+                                goto snow3g_f8_n_buffer_linear_exit;
+                        }
+                }
+
+                /*Compare the data in the pSrcBuff with the pDstBuff*/
+                for (j = 0; j < i; j++) {
+                        if (memcmp(pSrcBuff[j], pSrcBuff_const[j],
+                                   packetLen[j]) != 0) {
+                                printf("%s(Dec) %s nb_packets:%d vector:%d\n",
+                                       fn_name,  __func__, i, j);
+                                snow3g_hexdump("Actual:", pSrcBuff[j],
+                                               packetLen[j]);
+                                snow3g_hexdump("Expected:", pSrcBuff_const[j],
+                                               packetLen[j]);
+                                status = -1;
+                        }
+                }
+        }
+
+snow3g_f8_n_buffer_linear_exit:
+        for (i = 0; i < numPackets; i++) {
+                if (pKey[i] != NULL)
+                        free(pKey[i]);
+                if (pKeySched[i] != NULL)
+                        free(pKeySched[i]);
+                if (pSrcBuff[i] != NULL)
+                        free(pSrcBuff[i]);
+                if (pDstBuff[i] != NULL)
+                        free(pDstBuff[i]);
+                if (pSrcBuff_const[i] != NULL)
+                        free(pSrcBuff_const[i]);
+                if (pDstBuff_const[i] != NULL)
+                        free(pDstBuff_const[i]);
+                if (pIV[i] != NULL)
+                        free(pIV[i]);
+        }
+
+        if (status < 0)
+                test_suite_update(uea2_ctx, 0, 1);
+        else
+                test_suite_update(uea2_ctx, 1, 0);
+}
+
+static void
+validate_snow3g_f8_n_blocks_linear_mkeys(struct IMB_MGR *mb_mgr,
+                                         uint32_t job_api,
+                                         struct test_suite_context *uea2_ctx,
+                                         struct test_suite_context *uia2_ctx)
+{
+        int length, numVectors, i, j;
+        size_t size = 0;
+        cipher_test_vector_t *testVectors = snow3g_cipher_test_vectors[1];
+        /* snow3g f8 random test vectors are located at index 1 */
+        numVectors = numSnow3gCipherTestVectors[1];
+
+        snow3g_key_schedule_t **pKeySched;
+        uint8_t **pKey;
+        uint8_t **pSrcBuff;
+        uint8_t **pDstBuff;
+        uint8_t **pSrcBuff_const;
+        uint8_t **pDstBuff_const;
+        uint8_t **pIV;
+        uint32_t *packetLen;
+        uint32_t *bitOffsets;
+        uint32_t *bitLens;
+        int status = 0;
+
+        (void)uia2_ctx;
+#ifdef DEBUG
+        printf("Testing IMB_SNOW3G_F8_N_BUFFER_MULTI for usecase %s: (%s):\n",
+                __func__, job_api ? "Job API" : "Direct API");
+#endif
+
+        pSrcBuff = malloc(sizeof(*pSrcBuff) * numVectors);
+        pSrcBuff_const = malloc(sizeof(*pSrcBuff_const) * numVectors);
+        pDstBuff = malloc(sizeof(*pDstBuff) * numVectors);
+        pDstBuff_const = malloc(sizeof(*pDstBuff_const) * numVectors);
+        pIV = malloc(sizeof(*pIV) * numVectors);
+        pKey = malloc(sizeof(*pKey) * numVectors);
+        pKeySched = malloc(sizeof(*pKeySched) * numVectors);
+        packetLen = malloc(sizeof(*packetLen) * numVectors);
+        bitOffsets = malloc(sizeof(*bitOffsets) * numVectors);
+        bitLens = malloc(sizeof(*bitLens) * numVectors);
+
+        if (!pSrcBuff || !pSrcBuff_const || !pDstBuff ||
+            !pDstBuff_const || !pIV || !pKey || !pKeySched ||
+            !packetLen || !bitOffsets || !bitLens)
+                goto snow3g_f8_n_buff_linear_mkey_early_exit;
+
+        memset(pSrcBuff, 0, sizeof(*pSrcBuff) * numVectors);
+        memset(pSrcBuff_const, 0, sizeof(*pSrcBuff_const) * numVectors);
+        memset(pDstBuff, 0, sizeof(*pDstBuff) * numVectors);
+        memset(pDstBuff_const, 0, sizeof(*pDstBuff_const) * numVectors);
+        memset(pIV, 0, sizeof(*pIV) * numVectors);
+        memset(pKey, 0, sizeof(*pKey) * numVectors);
+        memset(pKeySched, 0, sizeof(*pKeySched) * numVectors);
+        memset(packetLen, 0, sizeof(*packetLen) * numVectors);
+        memset(bitOffsets, 0, sizeof(*bitOffsets) * numVectors);
+        memset(bitLens, 0, sizeof(*bitLens) * numVectors);
+
+        if (!numVectors) {
+                printf("No Snow3G test vectors found !\n");
+                status = -1;
+                goto snow3g_f8_n_buff_linear_mkey_exit;
+        }
+
+        size = IMB_SNOW3G_KEY_SCHED_SIZE(mb_mgr);
+        if (!size) {
+                status = -1;
+                goto snow3g_f8_n_buff_linear_mkey_exit;
+        }
+
+        /* Create test Data for num Vectors */
+        for (i = 0; i < numVectors; i++) {
+                /*vectors are in bits used to round up to bytes*/
+                length = testVectors[i].dataLenInBytes;
+
+                packetLen[i] = length;
+                bitLens[i] = length * 8;
+                bitOffsets[i] = 0;
+
+                pKey[i] = malloc(testVectors[i].keyLenInBytes);
+                if (!pKey[i]) {
+                        printf("malloc(pKey[%d]):failed !\n", i);
+                        status = -1;
+                        goto snow3g_f8_n_buff_linear_mkey_exit;
+                }
+                pKeySched[i] = malloc(size);
+                if (!pKeySched[i]) {
+                        printf("malloc(pKeySched[%d]): failed !\n", i);
+                        status = -1;
+                        goto snow3g_f8_n_buff_linear_mkey_exit;
+                }
+                pSrcBuff[i] = malloc(length);
+                if (!pSrcBuff[i]) {
+                        printf("malloc(pSrcBuff[%d]):failed !\n", i);
+                        status = -1;
+                        goto snow3g_f8_n_buff_linear_mkey_exit;
+                }
+                pDstBuff[i] = malloc(length);
+                if (!pDstBuff[i]) {
+                        printf("malloc(pDstBuff[%d]):failed !\n", i);
+                        status = -1;
+                        goto snow3g_f8_n_buff_linear_mkey_exit;
+                }
+                pSrcBuff_const[i] = malloc(length);
+                if (!pSrcBuff_const[i]) {
+                        printf("malloc(pSrcBuff_const[%d]):failed !\n", i);
+                        status = -1;
+                        goto snow3g_f8_n_buff_linear_mkey_exit;
+                }
+                pDstBuff_const[i] = malloc(length);
+                if (!pDstBuff_const[i]) {
+                        printf("malloc(pDstBuff_const[%d]):failed !\n", i);
+                        status = -1;
+                        goto snow3g_f8_n_buff_linear_mkey_exit;
+                }
+                pIV[i] = malloc(testVectors[i].ivLenInBytes);
+                if (!pIV[i]) {
+                        printf("malloc(pIV[%d]):failed !\n", i);
+                        status = -1;
+                        goto snow3g_f8_n_buff_linear_mkey_exit;
+                }
+
+                memcpy(pKey[i], testVectors[i].key,
+                       testVectors[i].keyLenInBytes);
+
+                memset(pSrcBuff[i], 0, length);
+                memcpy(pSrcBuff_const[i], testVectors[i].plaintext, length);
+
+                memset(pDstBuff[i], 0, length);
+                memcpy(pDstBuff_const[i], testVectors[i].ciphertext, length);
+
+                memcpy(pIV[i], testVectors[i].iv, testVectors[i].ivLenInBytes);
+
+                /* init key shed */
+                if (IMB_SNOW3G_INIT_KEY_SCHED(mb_mgr, pKey[i], pKeySched[i])) {
+                        printf("IMB_SNOW3G_INIT_KEY_SCHED(mb_mgr) error\n");
+                        status = -1;
+                        goto snow3g_f8_n_buff_linear_mkey_exit;
+                }
+        }
+
+        for (i = 0; i < numVectors; i++) {
+                int nb_elem, nb_remain_elem = i + 1, idx = 0;
+                const char *fn_name = job_api ?
+                        "submit_uea2_jobs" : "IMB_SNOW3G_F8_N_BUFFER_MULTIKEY";
+
+                for (j = 0; j <= i; j++) {
+                        /* Cleanup previous values */
+                        memset(pSrcBuff[j], 0, packetLen[j]);
+                        memset(pDstBuff[j], 0, packetLen[j]);
+                }
+
+                /*Test the encrypt*/
+                while (nb_remain_elem > 0) {
+                        if (nb_remain_elem >= NUM_SUPPORTED_BUFFERS) {
+                                nb_elem = NUM_SUPPORTED_BUFFERS;
+                                nb_remain_elem -= NUM_SUPPORTED_BUFFERS;
+                        } else {
+                                nb_elem = nb_remain_elem;
+                                nb_remain_elem = 0;
+                        }
+
+                        if (job_api) {
+                                submit_uea2_jobs(mb_mgr,
+                                                 (uint8_t **)&pKeySched[idx],
+                                                 &pIV[idx],
+                                                 &pSrcBuff_const[idx],
+                                                 &pDstBuff[idx], &bitLens[idx],
+                                                 &bitOffsets[idx],
+                                                 IMB_DIR_ENCRYPT, nb_elem);
+                        } else {
+                                IMB_SNOW3G_F8_N_BUFFER_MULTIKEY(
+                                    mb_mgr,
+                                    (const snow3g_key_schedule_t *const *)
+                                    &pKeySched[idx],
+                                    (const void *const *)&pIV[idx],
+                                    (const void *const *)&pSrcBuff_const[idx],
+                                    (void **)&pDstBuff[idx], &packetLen[idx],
+                                    nb_elem);
+                                if (pDstBuff[idx] == NULL) {
+                                        printf("N buffer failure\n");
+                                        status = -1;
+                                        goto snow3g_f8_n_buff_linear_mkey_exit;
+                                }
+                        }
+
+                        if (nb_elem == NUM_SUPPORTED_BUFFERS)
+                                idx += NUM_SUPPORTED_BUFFERS;
+                }
+
+                /*Compare the data in the pDstBuff with the cipher pattern*/
+                for (j = 0; j <= i; j++) {
+                        if (memcmp(pDstBuff_const[j], pDstBuff[j],
+                                   packetLen[j]) != 0) {
+                                printf("%s(Enc) %s nb_packets:%d vector: %d\n",
+                                       fn_name, __func__, i, j);
+                                snow3g_hexdump("Actual:", pDstBuff[j],
+                                               packetLen[j]);
+                                snow3g_hexdump("Expected:", pDstBuff_const[j],
+                                               packetLen[j]);
+                                status = -1;
+                        }
+                }
+
+                nb_remain_elem = i + 1;
+                idx = 0;
+                while (nb_remain_elem > 0) {
+                        if (nb_remain_elem >= NUM_SUPPORTED_BUFFERS) {
+                                nb_elem = NUM_SUPPORTED_BUFFERS;
+                                nb_remain_elem -= NUM_SUPPORTED_BUFFERS;
+                        } else {
+                                nb_elem = nb_remain_elem;
+                                nb_remain_elem = 0;
+                        }
+                        /*Test the Decrypt*/
+                        if (job_api) {
+                                submit_uea2_jobs(mb_mgr,
+                                                 (uint8_t **)&pKeySched[idx],
+                                                 &pIV[idx],
+                                                 &pDstBuff_const[idx],
+                                                 &pSrcBuff[idx], &bitLens[idx],
+                                                 &bitOffsets[idx],
+                                                 IMB_DIR_DECRYPT, nb_elem);
+                        } else {
+                                IMB_SNOW3G_F8_N_BUFFER_MULTIKEY(
+                                    mb_mgr,
+                                    (const snow3g_key_schedule_t *const *)
+                                    &pKeySched[idx],
+                                    (const void *const *)&pIV[idx],
+                                    (const void *const *)&pDstBuff_const[idx],
+                                    (void **)&pSrcBuff[idx], &packetLen[idx],
+                                    nb_elem);
+                                if (pSrcBuff[idx] == NULL) {
+                                        status = -1;
+                                        goto snow3g_f8_n_buff_linear_mkey_exit;
+                                }
+                        }
+
+                        if (nb_elem == NUM_SUPPORTED_BUFFERS)
+                                idx += NUM_SUPPORTED_BUFFERS;
+                }
+                /*Compare the data in the pSrcBuff with the pDstBuff*/
+                for (j = 0; j <= i; j++) {
+                        if (memcmp(pSrcBuff[j], pSrcBuff_const[j],
+                                   packetLen[j]) != 0) {
+                                printf("%s(Dec) %s nb_packets:%d vector: %d\n",
+                                       fn_name, __func__, i, j);
+                                snow3g_hexdump("Actual:", pSrcBuff[j],
+                                               packetLen[j]);
+                                snow3g_hexdump("Expected:", pSrcBuff_const[j],
+                                               packetLen[j]);
+                                status = -1;
+                        }
+                }
+        }
+
+snow3g_f8_n_buff_linear_mkey_exit:
+        for (i = 0; i < numVectors; i++) {
+                if (pKey[i] != NULL)
+                        free(pKey[i]);
+                if (pKeySched[i] != NULL)
+                        free(pKeySched[i]);
+                if (pSrcBuff[i] != NULL)
+                        free(pSrcBuff[i]);
+                if (pDstBuff[i] != NULL)
+                        free(pDstBuff[i]);
+                if (pSrcBuff_const[i] != NULL)
+                        free(pSrcBuff_const[i]);
+                if (pDstBuff_const[i] != NULL)
+                        free(pDstBuff_const[i]);
+                if (pIV[i] != NULL)
+                        free(pIV[i]);
+        }
+snow3g_f8_n_buff_linear_mkey_early_exit:
+        if (pKey != NULL)
+                free(pKey);
+        if (pSrcBuff != NULL)
+                free(pSrcBuff);
+        if (pSrcBuff_const != NULL)
+                free(pSrcBuff_const);
+        if (pDstBuff != NULL)
+                free(pDstBuff);
+        if (pDstBuff_const != NULL)
+                free(pDstBuff_const);
+        if (pIV != NULL)
+                free(pIV);
+        if (packetLen != NULL)
+                free(packetLen);
+        if (pKeySched != NULL)
+                free(pKeySched);
+        if (bitOffsets != NULL)
+                free(bitOffsets);
+        if (bitLens != NULL)
+                free(bitLens);
 
         if (status < 0)
                 test_suite_update(uea2_ctx, 0, 1);
@@ -2324,7 +2818,7 @@ static int validate_f8_iv_gen(void)
 
                 /* validate result */
                 if (memcmp(IV, snow3g_f8_linear_bitvectors.iv[i], 16) != 0) {
-                        printf("snow3g_f8_iv_gen vector num: %d\n", i);
+                        printf("snow3g_f8_iv_gen vector num: %u\n", i);
                         snow3g_hexdump("Actual", IV, 16);
                         snow3g_hexdump("Expected",
                                        snow3g_f8_linear_bitvectors.iv[i], 16);
@@ -2360,7 +2854,7 @@ static int validate_f9_iv_gen(void)
 
                 /* validate result */
                 if (memcmp(IV, snow_f9_vectors[i].iv, 16) != 0) {
-                        printf("snow3g_f9_iv_gen vector num: %d\n", i);
+                        printf("snow3g_f9_iv_gen vector num: %u\n", i);
                         snow3g_hexdump("Actual", IV, 16);
                         snow3g_hexdump("Expected", snow_f9_vectors[i].iv, 16);
                         return 1;

@@ -1,5 +1,5 @@
 /*******************************************************************************
-  Copyright (c) 2020-2021, Intel Corporation
+  Copyright (c) 2020-2022, Intel Corporation
 
   Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions are met:
@@ -77,7 +77,17 @@ IMB_DLL_LOCAL const int imb_errno_types[] = {
         IMB_ERR_AAD_LEN,
         IMB_ERR_SRC_OFFSET,
         IMB_ERR_NULL_AUTH_KEY,
-        IMB_ERR_NULL_CTX
+        IMB_ERR_NULL_CTX,
+        IMB_ERR_NO_AESNI_EMU,
+        IMB_ERR_JOB_NULL_HMAC_OPAD,
+        IMB_ERR_JOB_NULL_HMAC_IPAD,
+        IMB_ERR_JOB_NULL_XCBC_K1_EXP,
+        IMB_ERR_JOB_NULL_XCBC_K2,
+        IMB_ERR_JOB_NULL_XCBC_K3,
+        IMB_ERR_JOB_CIPH_DIR,
+        IMB_ERR_JOB_NULL_GHASH_INIT_TAG,
+        IMB_ERR_MISSING_CPUFLAGS_INIT_MGR,
+        IMB_ERR_NULL_JOB
 };
 
 #ifdef DEBUG
@@ -146,6 +156,18 @@ imb_get_strerror(int errnum)
                 return "Null pointer to next IV";
         case IMB_ERR_JOB_PON_PLI:
                 return "Invalid PON PLI (CRC length vs cipher length)";
+        case IMB_ERR_JOB_NULL_HMAC_OPAD:
+                return "Null pointer to HMAC OPAD";
+        case IMB_ERR_JOB_NULL_HMAC_IPAD:
+                return "Null pointer to HMAC IPAD";
+        case IMB_ERR_JOB_NULL_XCBC_K1_EXP:
+                return "Null pointer to XCBC K1 expanded";
+        case IMB_ERR_JOB_NULL_XCBC_K2:
+                return "Null pointer to XCBC K2";
+        case IMB_ERR_JOB_NULL_XCBC_K3:
+                return "Null pointer to XCBC K3";
+        case IMB_ERR_JOB_NULL_GHASH_INIT_TAG:
+                return "Null pointer to GHASH initial tag value";
         case IMB_ERR_NULL_SRC:
                 return "Null source pointer (direct API)";
         case IMB_ERR_NULL_DST:
@@ -180,6 +202,15 @@ imb_get_strerror(int errnum)
                 return "Null pointer to authentication key (direct API)";
         case IMB_ERR_NULL_CTX:
                 return "Null pointer to context (direct API)";
+        case IMB_ERR_NO_AESNI_EMU:
+                return "No AESNI emulation support";
+        case IMB_ERR_JOB_CIPH_DIR:
+                return "Invalid cipher direction";
+        case IMB_ERR_MISSING_CPUFLAGS_INIT_MGR:
+                return "Failed to initialize IMB_MGR due to missing "
+                       "required CPU flags";
+        case IMB_ERR_NULL_JOB:
+                return "NULL job pointer";
         default:
                 return strerror(errnum);
         }

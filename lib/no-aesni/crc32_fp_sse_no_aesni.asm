@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2020-2021, Intel Corporation
+;; Copyright (c) 2020-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -30,4 +30,4 @@
 %define CRC11_FP_HEADER_FN  crc11_fp_header_sse_no_aesni
 %define CRC7_FP_HEADER_FN   crc7_fp_header_sse_no_aesni
 %define CRC32_FN            crc32_by8_sse_no_aesni
-%include "sse/crc32_fp_sse.asm"
+%include "sse_t1/crc32_fp_sse.asm"

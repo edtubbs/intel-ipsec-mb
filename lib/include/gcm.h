@@ -1,5 +1,5 @@
 /*******************************************************************************
-  Copyright (c) 2018-2021, Intel Corporation
+  Copyright (c) 2018-2022, Intel Corporation
 
   Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions are met:
@@ -330,6 +330,7 @@ aes_gcm_pre_256_avx512(const void *key, struct gcm_key_data *key_data);
  * - intentionally this is not exposed in intel-ipsec-mb.h
  * - available through IMB_GCM_xxx() macros from intel-ipsec-mb.h
  */
+#ifdef AESNI_EMU
 IMB_DLL_EXPORT void
 aes_gcm_enc_128_sse_no_aesni(const struct gcm_key_data *key_data,
                              struct gcm_context_data *context_data,
@@ -472,6 +473,7 @@ IMB_DLL_EXPORT void
 aes_gcm_pre_192_sse_no_aesni(const void *key, struct gcm_key_data *key_data);
 IMB_DLL_EXPORT void
 aes_gcm_pre_256_sse_no_aesni(const void *key, struct gcm_key_data *key_data);
+#endif /* AESNI-EMU */
 
 /*
  * Extra GCM API (for SSE/AVX/AVX2)
@@ -842,25 +844,25 @@ aes_gcm_dec_var_iv_256_sse_no_aesni(const struct gcm_key_data *key_data,
  */
 
 IMB_DLL_EXPORT void
-ghash_sse_no_aesni(struct gcm_key_data *key_data, const void *in,
+ghash_sse_no_aesni(const struct gcm_key_data *key_data, const void *in,
                    const uint64_t in_len, void *io_tag, const uint64_t tag_len);
 IMB_DLL_EXPORT void
-ghash_sse(struct gcm_key_data *key_data, const void *in,
+ghash_sse(const struct gcm_key_data *key_data, const void *in,
           const uint64_t in_len, void *io_tag, const uint64_t tag_len);
 IMB_DLL_EXPORT void
-ghash_avx_gen2(struct gcm_key_data *key_data, const void *in,
+ghash_avx_gen2(const struct gcm_key_data *key_data, const void *in,
                const uint64_t in_len, void *io_tag,
                const uint64_t tag_len);
 IMB_DLL_EXPORT void
-ghash_avx_gen4(struct gcm_key_data *key_data, const void *in,
+ghash_avx_gen4(const struct gcm_key_data *key_data, const void *in,
                const uint64_t in_len, void *io_tag,
                const uint64_t tag_len);
 IMB_DLL_EXPORT void
-ghash_avx512(struct gcm_key_data *key_data, const void *in,
+ghash_avx512(const struct gcm_key_data *key_data, const void *in,
              const uint64_t in_len, void *io_tag,
              const uint64_t tag_len);
 IMB_DLL_EXPORT void
-ghash_vaes_avx512(struct gcm_key_data *key_data, const void *in,
+ghash_vaes_avx512(const struct gcm_key_data *key_data, const void *in,
                   const uint64_t in_len, void *io_tag,
                   const uint64_t tag_len);
 

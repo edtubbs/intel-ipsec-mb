@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2012-2021, Intel Corporation
+;; Copyright (c) 2012-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -169,6 +169,7 @@ error_keyexp_sse:
         jmp aes_keyexp_128_sse_return
 %endif
 
+%ifdef AESNI_EMU
 MKGLOBAL(aes_keyexp_128_sse_no_aesni,function,)
 aes_keyexp_128_sse_no_aesni:
         endbranch64
@@ -264,6 +265,7 @@ error_keyexp_sse_no_aesni:
 
         jmp aes_keyexp_128_sse_no_aesni_return
 %endif
+%endif ; AESNI_EMU
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -453,6 +455,7 @@ error_keyexp_enc_sse:
         jmp aes_keyexp_128_enc_sse_return
 %endif
 
+%ifdef AESNI_EMU
 MKGLOBAL(aes_keyexp_128_enc_sse_no_aesni,function,)
 aes_keyexp_128_enc_sse_no_aesni:
         endbranch64
@@ -521,6 +524,7 @@ error_keyexp_enc_sse_no_aesni:
 
         jmp error_keyexp_enc_sse_no_aesni
 %endif
+%endif ; AESNI_EMU
 
 MKGLOBAL(aes_keyexp_128_enc_avx,function,)
 MKGLOBAL(aes_keyexp_128_enc_avx2,function,)

@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2018-2021, Intel Corporation
+;; Copyright (c) 2018-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -27,4 +27,4 @@
 
 %include "include/aesni_emu.inc"
 %define AES_CBC_ENC_X4 aes_cbc_enc_192_x4_no_aesni
-%include "sse/aes192_cbc_enc_x4_sse.asm"
+%include "sse_t1/aes192_cbc_enc_x4_sse.asm"

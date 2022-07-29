@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2018-2021, Intel Corporation
+;; Copyright (c) 2018-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -25,6 +25,7 @@
 ;; OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ;;
 
+%ifdef AESNI_EMU
 %ifndef _AESNI_EMU_INC_
 %define _AESNI_EMU_INC_
 
@@ -262,3 +263,4 @@ extern emulate_AESKEYGENASSIST
 extern emulate_PCLMULQDQ
 
 %endif ; end ifndef _AESNI_EMU_INC_
+%endif ; AESNI_EMU

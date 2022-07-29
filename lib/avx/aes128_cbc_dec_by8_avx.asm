@@ -1,5 +1,5 @@
 ;;
-;; Copyright (c) 2012-2021, Intel Corporation
+;; Copyright (c) 2012-2022, Intel Corporation
 ;;
 ;; Redistribution and use in source and binary forms, with or without
 ;; modification, are permitted provided that the following conditions are met:
@@ -31,6 +31,7 @@
 
 %include "include/os.asm"
 %include "include/clear_regs.asm"
+%include "include/cet.inc"
 
 %define CONCAT(a,b) a %+ b
 %define VMOVDQ vmovdqu
@@ -215,7 +216,7 @@ mksection .text
 
 MKGLOBAL(AES_CBC_DEC_128_X8,function,internal)
 AES_CBC_DEC_128_X8:
-
+        endbranch64
 %ifndef LINUX
 	mov	num_bytes, [rsp + 8*5]
 %else

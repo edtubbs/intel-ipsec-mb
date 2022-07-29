@@ -1,5 +1,5 @@
 /*******************************************************************************
-  Copyright (c) 2009-2021, Intel Corporation
+  Copyright (c) 2009-2022, Intel Corporation
 
   Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions are met:
@@ -142,14 +142,12 @@ void _zuc_eea3_4_buffer_sse_no_aesni(const void * const pKey[NUM_SSE_BUFS],
                            length[2] : length[3]);
         /* min number of bytes */
         uint32_t bytes = (bytes1 < bytes2) ? bytes1 : bytes2;
-        uint32_t numKeyStreamsPerPkt;
         uint16_t remainBytes[NUM_SSE_BUFS] = {0};
         DECLARE_ALIGNED(uint8_t keyStr[NUM_SSE_BUFS][KEYSTR_ROUND_LEN], 64);
         /* structure to store the 4 keys */
         DECLARE_ALIGNED(ZucKey4_t keys, 64);
         /* structure to store the 4 IV's */
         DECLARE_ALIGNED(uint8_t ivs[4*32], 16);
-        uint32_t numBytesLeftOver = 0;
         const uint8_t *pTempBufInPtr = NULL;
         uint8_t *pTempBufOutPtr = NULL;
         const uint64_t *pIn64[NUM_SSE_BUFS]= {NULL};
@@ -201,8 +199,10 @@ void _zuc_eea3_4_buffer_sse_no_aesni(const void * const pKey[NUM_SSE_BUFS],
                         singlePktState.fR1 = state.fR1[i];
                         singlePktState.fR2 = state.fR2[i];
 
-                        numKeyStreamsPerPkt = remainBytes[i] / KEYSTR_ROUND_LEN;
-                        numBytesLeftOver = remainBytes[i]  % KEYSTR_ROUND_LEN;
+                        uint32_t numKeyStreamsPerPkt =
+                                remainBytes[i] / KEYSTR_ROUND_LEN;
+                        const uint32_t numBytesLeftOver =
+                                remainBytes[i]  % KEYSTR_ROUND_LEN;
 
                         pTempBufInPtr = pBufferIn[i];
                         pTempBufOutPtr = pBufferOut[i];
@@ -533,9 +533,6 @@ void _zuc_eia3_1_buffer_sse_no_aesni(const void *pKey,
         DECLARE_ALIGNED(ZucState_t zucState, 64);
         DECLARE_ALIGNED(uint32_t keyStream[4 * 2], 64);
         const uint32_t keyStreamLengthInBits = KEYSTR_ROUND_LEN * 8;
-        /* generate a key-stream 2 words longer than the input message */
-        const uint32_t N = lengthInBits + (2 * ZUC_WORD_BITS);
-        uint32_t L = (N + 31) / ZUC_WORD_BITS;
         uint32_t *pZuc = (uint32_t *) &keyStream[0];
         uint32_t remainingBits = lengthInBits;
         uint32_t T = 0;
@@ -547,7 +544,6 @@ void _zuc_eia3_1_buffer_sse_no_aesni(const void *pKey,
         /* loop over the message bits */
         while (remainingBits >= keyStreamLengthInBits) {
                 remainingBits -=  keyStreamLengthInBits;
-                L -= (keyStreamLengthInBits / 32);
 
                 /* Generate the next key stream 8 bytes or 16 bytes */
                 if (!remainingBits)
@@ -556,7 +552,7 @@ void _zuc_eia3_1_buffer_sse_no_aesni(const void *pKey,
                 else
                         asm_ZucGenKeystream16B_sse_no_aesni(&keyStream[4],
                                                             &zucState);
-                asm_Eia3Round16BSSE_no_aesni(&T, keyStream, pIn8, 4);
+                asm_Eia3Round16B_sse_no_aesni(&T, keyStream, pIn8, 4);
                 pIn8 = &pIn8[KEYSTR_ROUND_LEN];
         }
 
@@ -566,8 +562,8 @@ void _zuc_eia3_1_buffer_sse_no_aesni(const void *pKey,
          */
         if (remainingBits > (2 * 32))
                 asm_ZucGenKeystream8B_sse_no_aesni(&keyStream[4], &zucState);
-        asm_Eia3RemainderSSE_no_aesni(&T, &keyStream[0], pIn8, remainingBits,
-                                      128, 4);
+        asm_Eia3Remainder_sse_no_aesni(&T, &keyStream[0], pIn8, remainingBits,
+                                       128, 4);
 
         /* save the final MAC-I result */
         *pMacI = T;
@@ -647,17 +643,14 @@ void _zuc_eia3_4_buffer_sse_no_aesni(const void * const pKey[NUM_SSE_BUFS],
                         asm_ZucGenKeystream16B_4_sse_no_aesni(&state,
                                                               pKeyStrArr);
                 for (i = 0; i < NUM_SSE_BUFS; i++) {
-                        asm_Eia3Round16BSSE_no_aesni(&T[i], keyStr[i],
-                                                     pIn8[i], 4);
+                        asm_Eia3Round16B_sse_no_aesni(&T[i], keyStr[i],
+                                                      pIn8[i], 4);
                         pIn8[i] = &pIn8[i][KEYSTR_ROUND_LEN];
                 }
         }
 
         /* Process each packet separately for the remaining bits */
         for (i = 0; i < NUM_SSE_BUFS; i++) {
-                const uint32_t N = lengthInBits[i] + (2 * ZUC_WORD_BITS);
-                uint32_t L = ((N + 31) / ZUC_WORD_BITS) -
-                             numKeyStr*(keyStreamLengthInBits / 32);
                 uint32_t remainBits = lengthInBits[i] -
                                       numKeyStr*keyStreamLengthInBits;
                 uint32_t *keyStr32 = (uint32_t *) keyStr[i];
@@ -689,7 +682,6 @@ void _zuc_eia3_4_buffer_sse_no_aesni(const void * const pKey[NUM_SSE_BUFS],
 
                 while (remainBits >= keyStreamLengthInBits) {
                         remainBits -= keyStreamLengthInBits;
-                        L -= (keyStreamLengthInBits / 32);
 
                         /* Generate the next key stream 8 bytes or 16 bytes */
                         if (!remainBits)
@@ -700,8 +692,8 @@ void _zuc_eia3_4_buffer_sse_no_aesni(const void * const pKey[NUM_SSE_BUFS],
                                 asm_ZucGenKeystream16B_sse_no_aesni(
                                                         &keyStr32[4],
                                                         &singlePktState);
-                        asm_Eia3Round16BSSE_no_aesni(&T[i], keyStr32,
-                                                     pIn8[i], 4);
+                        asm_Eia3Round16B_sse_no_aesni(&T[i], keyStr32,
+                                                      pIn8[i], 4);
                         pIn8[i] = &pIn8[i][KEYSTR_ROUND_LEN];
                 }
 
@@ -713,8 +705,8 @@ void _zuc_eia3_4_buffer_sse_no_aesni(const void * const pKey[NUM_SSE_BUFS],
                         asm_ZucGenKeystream8B_sse_no_aesni(&keyStr32[4],
                                                            &singlePktState);
 
-                asm_Eia3RemainderSSE_no_aesni(&T[i], keyStr32, pIn8[i],
-                                              remainBits, 128, 4);
+                asm_Eia3Remainder_sse_no_aesni(&T[i], keyStr32, pIn8[i],
+                                               remainBits, 128, 4);
                 /* save the final MAC-I result */
                 *(pMacI[i]) = T[i];
         }
@@ -850,8 +842,8 @@ zuc_eia3_4_buffer_job_sse_no_aesni(const void * const pKey[NUM_SSE_BUFS],
                 for (i = 0; i < NUM_SSE_BUFS; i++) {
                         if (job_in_lane[i] == NULL)
                                 continue;
-                        asm_Eia3Round16BSSE_no_aesni(&T[i], keyStr[i],
-                                                     pIn8[i], 4);
+                        asm_Eia3Round16B_sse_no_aesni(&T[i], keyStr[i],
+                                                      pIn8[i], 4);
                         pIn8[i] = &pIn8[i][KEYSTR_ROUND_LEN];
                 }
         }
@@ -906,8 +898,8 @@ zuc_eia3_4_buffer_job_sse_no_aesni(const void * const pKey[NUM_SSE_BUFS],
                                 asm_ZucGenKeystream16B_sse_no_aesni(
                                                         &keyStr32[4],
                                                         &singlePktState);
-                        asm_Eia3Round16BSSE_no_aesni(&T[i], keyStr32,
-                                                     pIn8[i], 4);
+                        asm_Eia3Round16B_sse_no_aesni(&T[i], keyStr32,
+                                                      pIn8[i], 4);
                         pIn8[i] = &pIn8[i][KEYSTR_ROUND_LEN];
                 }
 
@@ -919,8 +911,8 @@ zuc_eia3_4_buffer_job_sse_no_aesni(const void * const pKey[NUM_SSE_BUFS],
                         asm_ZucGenKeystream8B_sse_no_aesni(&keyStr32[4],
                                                            &singlePktState);
 
-                asm_Eia3RemainderSSE_no_aesni(&T[i], keyStr32, pIn8[i],
-                                              remainBits, 128, 4);
+                asm_Eia3Remainder_sse_no_aesni(&T[i], keyStr32, pIn8[i],
+                                               remainBits, 128, 4);
                 /* save the final MAC-I result */
                 *(pMacI[i]) = T[i];
         }
@@ -951,7 +943,7 @@ zuc256_eia3_4_buffer_job_sse_no_aesni(const void * const pKey[NUM_SSE_BUFS],
         DECLARE_ALIGNED(ZucKey4_t keys, 64);
         const uint8_t *pIn8[NUM_SSE_BUFS] = {NULL};
         uint32_t remainCommonBits;
-        uint32_t numKeyStr = 0;
+        uint32_t dataDigested = 0;
         uint8_t T[NUM_SSE_BUFS*16] = {0};
         const uint32_t keyStreamLengthInBits = KEYSTR_ROUND_LEN * 8;
         uint32_t *pKeyStrArr[NUM_SSE_BUFS] = {NULL};
@@ -980,7 +972,6 @@ zuc256_eia3_4_buffer_job_sse_no_aesni(const void * const pKey[NUM_SSE_BUFS],
                 keys.pKeys[i] = pKey[i];
         }
 
-        /* TODO: Handle 8 and 16-byte digest cases */
         asm_Zuc256Initialization_4_sse_no_aesni(&keys, ivs, &state, T,
                                                 tag_size);
 
@@ -994,41 +985,51 @@ zuc256_eia3_4_buffer_job_sse_no_aesni(const void * const pKey[NUM_SSE_BUFS],
         /* loop over the message bits */
         while (remainCommonBits >= keyStreamLengthInBits) {
                 remainCommonBits -= keyStreamLengthInBits;
-                numKeyStr++;
+                dataDigested += keyStreamLengthInBits;
                 /* Generate the next key stream 4 bytes or 16 bytes */
                 if (!remainCommonBits && allCommonBits)
-                        asm_ZucGenKeystream4B_4_sse_no_aesni(&state,
+                        if (tag_size == 4)
+                                asm_ZucGenKeystream4B_4_sse_no_aesni(&state,
+                                                             pKeyStrArr);
+                        else if (tag_size == 8)
+                                asm_ZucGenKeystream8B_4_sse_no_aesni(&state,
+                                                             pKeyStrArr);
+                        else
+                                asm_ZucGenKeystream16B_4_sse_no_aesni(&state,
                                                              pKeyStrArr);
                 else
                         asm_ZucGenKeystream16B_4_sse_no_aesni(&state,
                                                              pKeyStrArr);
 
                 for (i = 0; i < NUM_SSE_BUFS; i++) {
-                        uint32_t *tag = (uint32_t *) &T[i*4];
+                        void *tag = (void *) &T[i*tag_size];
 
                         if (job_in_lane[i] == NULL)
                                 continue;
-                        asm_Eia3Round16BSSE_no_aesni(tag, keyStr[i], pIn8[i],
-                                                     tag_size);
+                        asm_Eia3Round16B_sse_no_aesni(tag, keyStr[i], pIn8[i],
+                                                      tag_size);
                         pIn8[i] = &pIn8[i][KEYSTR_ROUND_LEN];
                 }
         }
 
         /* Process each packet separately for the remaining bits */
         for (i = 0; i < NUM_SSE_BUFS; i++) {
-                uint32_t *tag = (uint32_t *) &T[i*4];
+                void *tag = (void *) &T[i*tag_size];
 
                 if (job_in_lane[i] == NULL)
                         continue;
 
-                uint32_t remainBits = lengthInBits[i] -
-                                      numKeyStr*keyStreamLengthInBits;
                 uint32_t *keyStr32 = (uint32_t *) keyStr[i];
+                uint32_t remainBits = lengthInBits[i] - dataDigested;
+                const uint32_t N = remainBits + ((uint32_t) tag_size << 3);
+                uint32_t L = ((N + 31) / ZUC_WORD_BITS);
 
-                /* If remaining bits are more than 4 bytes, we need to generate
-                 * at least 4B more of keystream, so we need to copy
-                 * the zuc state to single packet state first */
-                if (remainBits > 32) {
+                /* 4 KS words are generated already */
+                L = (L > 4) ? (L - 4) : 0;
+
+                /* Copy the ZUC state to single packet state,
+                 * if more KS is needed */
+                if (L > 0) {
                         singlePktState.lfsrState[0] = state.lfsrState[0][i];
                         singlePktState.lfsrState[1] = state.lfsrState[1][i];
                         singlePktState.lfsrState[2] = state.lfsrState[2][i];
@@ -1053,30 +1054,30 @@ zuc256_eia3_4_buffer_job_sse_no_aesni(const void * const pKey[NUM_SSE_BUFS],
                 while (remainBits >= keyStreamLengthInBits) {
                         remainBits -= keyStreamLengthInBits;
 
-                        /* Generate the next key stream 4 bytes or 16 bytes */
-                        if (!remainBits)
-                                asm_ZucGenKeystream_sse_no_aesni(
-                                                          &keyStr32[4],
-                                                          &singlePktState, 1);
-                        else
+                        /* Generate the next key stream (16 bytes max) */
+                        if (L > 3) {
                                 asm_ZucGenKeystream16B_sse_no_aesni(
                                                         &keyStr32[4],
                                                         &singlePktState);
-                        asm_Eia3Round16BSSE_no_aesni(tag, keyStr32, pIn8[i],
-                                                     tag_size);
+                                L -= 4;
+                        } else {
+                                asm_ZucGenKeystream_sse_no_aesni(
+                                                        &keyStr32[4],
+                                                        &singlePktState, L);
+                                L = 0;
+                        }
+                        asm_Eia3Round16B_sse_no_aesni(tag, keyStr32, pIn8[i],
+                                                      tag_size);
                         pIn8[i] = &pIn8[i][KEYSTR_ROUND_LEN];
                 }
 
-                /*
-                 * If remaining bits has more than 1 ZUC WORD (double words),
-                 * keystream needs to have another 1 ZUC WORD (4B)
-                 */
-                if (remainBits > 32)
-                        asm_ZucGenKeystream8B_sse_no_aesni(&keyStr32[4],
-                                                           &singlePktState);
+                /* Generate final keystream if needed */
+                if (L > 0)
+                        asm_ZucGenKeystream_sse_no_aesni(&keyStr32[4],
+                                                         &singlePktState, L);
 
-                asm_Eia3RemainderSSE_no_aesni(tag, keyStr32, pIn8[i],
-                                              remainBits, 256, tag_size);
+                asm_Eia3Remainder_sse_no_aesni(tag, keyStr32, pIn8[i],
+                                               remainBits, 256, tag_size);
                 /* save the final MAC-I result */
                 memcpy(pMacI[i], tag, tag_size);
         }

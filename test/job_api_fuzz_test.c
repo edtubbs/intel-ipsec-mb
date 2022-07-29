@@ -1,5 +1,5 @@
 /**********************************************************************
-  Copyright(c) 2021, Intel Corporation All rights reserved.
+  Copyright(c) 2021-2022, Intel Corporation All rights reserved.
 
   Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions
@@ -33,6 +33,8 @@
 #include <time.h>
 
 #include <intel-ipsec-mb.h>
+
+#define BUFF_SIZE (32*1024*1024)
 
 int LLVMFuzzerTestOneInput(const uint8_t *, size_t);
 
@@ -192,8 +194,11 @@ static void fill_additional_hash_data(struct IMB_JOB *job,
                 if (job->u.CMAC._skey2 != NULL)
                         job->u.CMAC._skey2 = buff;
                 break;
-        case IMB_AUTH_ZUC_EIA3_BITLEN:
         case IMB_AUTH_ZUC256_EIA3_BITLEN:
+                if (job->u.ZUC_EIA3._iv23 != NULL)
+                        job->u.ZUC_EIA3._iv23 = (uint8_t *)buff;
+                /* fall through */
+        case IMB_AUTH_ZUC_EIA3_BITLEN:
                 if (job->u.ZUC_EIA3._key != NULL)
                         job->u.ZUC_EIA3._key = (uint8_t *)buff;
                 if (job->u.ZUC_EIA3._iv != NULL)
@@ -219,6 +224,12 @@ static void fill_additional_hash_data(struct IMB_JOB *job,
                         job->u.GMAC._iv = buff;
                 if (job->u.GMAC.iv_len_in_bytes > buffsize)
                         job->u.GMAC.iv_len_in_bytes = buffsize;
+                break;
+        case IMB_AUTH_GHASH:
+                if (job->u.GHASH._key != NULL)
+                        job->u.GHASH._key = buff;
+                if (job->u.GHASH._init_tag != NULL)
+                        job->u.GHASH._init_tag = buff;
                 break;
         case IMB_AUTH_POLY1305:
                 if (job->u.POLY1305._key != NULL)
@@ -330,16 +341,8 @@ static IMB_HASH_ALG hash_selection(void)
                         return IMB_AUTH_AES_GMAC_192;
                 else if (strcmp(a, "IMB_AUTH_AES_GMAC_256") == 0)
                         return IMB_AUTH_AES_GMAC_256;
-                else if (strcmp(a, "IMB_AUTH_NULL") == 0)
-                        return IMB_AUTH_NULL;
-                else if (strcmp(a, "IMB_AUTH_AES_GMAC") == 0)
-                        return IMB_AUTH_AES_GMAC;
                 else if (strcmp(a, "IMB_AUTH_AES_CMAC_256") == 0)
                         return IMB_AUTH_AES_CMAC_256;
-                else if (strcmp(a, "IMB_AUTH_AES_CCM") == 0)
-                        return IMB_AUTH_AES_CCM;
-                else if (strcmp(a, "IMB_AUTH_AES_CMAC") == 0)
-                        return IMB_AUTH_AES_CMAC;
                 else if (strcmp(a, "IMB_AUTH_POLY1305") == 0)
                         return IMB_AUTH_POLY1305;
                 else if (strcmp(a, "IMB_AUTH_CHACHA20_POLY1305") == 0)
@@ -376,6 +379,8 @@ static IMB_HASH_ALG hash_selection(void)
                         return IMB_AUTH_CRC7_FP_HEADER;
                 else if (strcmp(a, "IMB_AUTH_CRC6_IUUP_HEADER") == 0)
                         return IMB_AUTH_CRC6_IUUP_HEADER;
+                else if (strcmp(a, "IMB_AUTH_GHASH") == 0)
+                        return IMB_AUTH_GHASH;
                 else
                         return 0;
         }
@@ -450,7 +455,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t dataSize)
         IMB_ARCH arch;
         unsigned i;
         const unsigned num_jobs = 20;
-        const size_t buffsize = (32*1024*1024);
+        const size_t buffsize = BUFF_SIZE;
         /* Setting minimum datasize to always fill job structure  */
         if (dataSize < sizeof(IMB_JOB))
                 return 0;
@@ -480,8 +485,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t dataSize)
         IMB_JOB *job = NULL;
 
         for (i = 0; i < num_jobs; i++) {
-                void *buff;
-
                 hash = hash_selection();
                 cipher = cipher_selection();
                 job = IMB_GET_NEXT_JOB(p_mgr);
@@ -499,32 +502,13 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t dataSize)
                 else
                         job->cipher_mode = cipher;
                 clamp_lengths(job, buffsize);
-
-                if (posix_memalign((void **)&buff, 64, (2*buffsize)))
-                        goto end;
+                static DECLARE_ALIGNED(uint8_t buff[2*BUFF_SIZE], 64);
 
                 fill_job_data(job, buff);
                 fill_additional_cipher_data(job, buff, buffsize);
                 fill_additional_hash_data(job, buff, buffsize);
                 job = IMB_SUBMIT_JOB(p_mgr);
-
-                int err = imb_get_errno(p_mgr);
-                /*
-                 * If error in submission free the buff.
-                 * Else if submission was successful and we
-                 * got a job back, then free buffer associated
-                 * with returned job
-                 */
-                if (err != 0)
-                        free(buff);
-                else if (job != NULL)
-                        free(job->dst);
         }
- end:
-
-        while ((job = IMB_FLUSH_JOB(p_mgr)) != NULL)
-                free(job->dst);
-
         free_mb_mgr(p_mgr);
         return 0;
 }
